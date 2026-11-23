@@ -304,9 +304,11 @@ transpose(fifth, C) transpose(fifth, D)
 ```
 
 Use `$` to separate statements on the same line. It takes no time and creates
-no notation. Both `let name <- value` and `name <- value` can take a sequence
-of score values. A newline ends that sequence between items, and parentheses
-let the sequence span multiple lines.
+no notation. Both `let name <- value` and `name <- value` can take sequences
+and comma-separated parallel branches. For example, `let chord <- C,E,G`
+stores three simultaneous notes. A newline ends a complete value between
+items. A comma at the end of a line continues the value onto the next line,
+and parentheses allow a value to span multiple lines.
 
 ```text
 let foo <- 1 $ let bar <- 2 3 $ foo bar

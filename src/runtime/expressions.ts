@@ -908,7 +908,12 @@ export function evaluateExpression(
           },
         ],
       }
-    if (node.type === 'Group' || node.type === 'NormalizeToSlot' || node.type === 'Sequence')
+    if (
+      node.type === 'Group' ||
+      node.type === 'NormalizeToSlot' ||
+      node.type === 'Sequence' ||
+      node.type === 'Parallel'
+    )
       return containerItems(node, mapping, environment)
     if (node.type === 'PitchModifierExpression') {
       const operand = evaluateExpression(node.operand, mapping, environment)

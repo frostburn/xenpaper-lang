@@ -42,6 +42,33 @@ describe('beat event expansion', () => {
   })
 
   it.each([
+    'let chord <- C,E,G $ chord',
+    'let chord <- C,E,G\nchord',
+    'let chord <- C,\n E,\n G\nchord',
+    'let chord <- C $ chord <- C,E,G $ chord',
+    'fn phrase(chord) { chord <- C,E,G $ ret chord } $ phrase(C)',
+  ])('plays ungrouped parallel binding values in %s', (source) => {
+    const result = score(source)
+    expect(result.duration.toFraction()).toBe('1')
+    expect(result.events.map((event) => [event.kind, event.start.toFraction()])).toEqual([
+      ['note', '0'],
+      ['note', '0'],
+      ['note', '0'],
+    ])
+    expect(
+      result.events.map((event) => event.kind === 'note' && event.pitch.value.valueOf()),
+    ).toEqual(
+      score('C,E,G').events.map((event) => event.kind === 'note' && event.pitch.value.valueOf()),
+    )
+  })
+
+  it('binds a sequence more tightly than a comma in a parallel binding value', () => {
+    const result = score('let phrase <- C D,E $ phrase')
+    expect(result.duration.toFraction()).toBe('2')
+    expect(result.events.map((event) => event.start.toFraction())).toEqual(['0', '0', '1'])
+  })
+
+  it.each([
     'let foo <- 1 $ let bar <- 2 3 $ foo bar',
     'let foo <- 1\nlet bar <- 2 3\n\nfoo bar',
     'let foo <- 1\nlet bar <- (\n  2\n  3\n)\n\nfoo bar',

@@ -926,7 +926,13 @@ VariableDeclaration
 // A newline can end the binding value between score items. An expression can
 // still consume newlines itself, for example inside parentheses or after an operator.
 BindingValue
-  = first:Expression
+  = first:BindingSequence
+    rest:([ \t]* "," Spacing branch:BindingSequence { return branch; })* {
+      return parallel([first, ...rest]);
+    }
+
+BindingSequence
+  = !StatementStart first:Expression
     rest:([ \t]* !StatementStart item:Expression { return item; })* {
       return sequence([first, ...rest]);
     }
