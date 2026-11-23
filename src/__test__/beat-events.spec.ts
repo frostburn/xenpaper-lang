@@ -48,6 +48,10 @@ describe('beat event expansion', () => {
     'let foo <- 1 # comment\r\nlet bar <- 2 3\r\nfoo bar $',
     'fn phrase() { let bar <- 2 3 $ ret 1 bar $ } $ phrase()',
     'if(true) { let bar <- 2 3 $ 1 bar $ }',
+    'let bar <- 0 $ bar <- 2 3 $ 1 bar',
+    'let bar <- 0\nbar <- 2 3\n1 bar',
+    'let bar <- 0\nbar <- (\n  2\n  3\n)\n1 bar',
+    'fn phrase(bar) { bar <- 2 3 $ ret 1 bar } $ phrase(0)',
   ])('plays 1 2 3 with delimited declarations in %s', (source) => {
     const result = score(source)
     expect(result.duration.toFraction()).toBe('3')

@@ -71,7 +71,7 @@ describe('global grid context', () => {
     const initialization = initialize(`
 let chosen <- false
 .
-for (value of [true]) { chosen <- value . }
+for (value of [true]) { chosen <- value $ . }
 .
 `)
     const phrase = 'if (chosen) { C } else { D }'

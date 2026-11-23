@@ -919,13 +919,13 @@ CallArguments
 // parallel branches receive child scopes. Shadowing is permitted; recursion is
 // deliberately rejected by the evaluator.
 VariableDeclaration
-  = "let" !IdentifierContinue RequiredSpacing name:LocatedIdentifier Spacing "<-" Spacing value:DeclarationValue {
+  = "let" !IdentifierContinue RequiredSpacing name:LocatedIdentifier Spacing "<-" Spacing value:BindingValue {
       return node('VariableDeclaration', { name, value });
     }
 
-// A newline can end the initializer between score items. An expression can
+// A newline can end the binding value between score items. An expression can
 // still consume newlines itself, for example inside parentheses or after an operator.
-DeclarationValue
+BindingValue
   = first:Expression
     rest:([ \t]* !StatementStart item:Expression { return item; })* {
       return sequence([first, ...rest]);
@@ -936,7 +936,7 @@ StatementStart
   / LocatedIdentifier Spacing "<-"
 
 BindingAssignment
-  = name:LocatedIdentifier Spacing "<-" Spacing value:Expression {
+  = name:LocatedIdentifier Spacing "<-" Spacing value:BindingValue {
       return node('BindingAssignment', { name, value });
     }
 

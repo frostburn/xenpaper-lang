@@ -304,9 +304,9 @@ transpose(fifth, C) transpose(fifth, D)
 ```
 
 Use `$` to separate statements on the same line. It takes no time and creates
-no notation. A `let` initializer can contain a sequence of score values. A
-newline ends that sequence between items, and parentheses let the sequence
-span multiple lines.
+no notation. Both `let name <- value` and `name <- value` can take a sequence
+of score values. A newline ends that sequence between items, and parentheses
+let the sequence span multiple lines.
 
 ```text
 let foo <- 1 $ let bar <- 2 3 $ foo bar
