@@ -9,8 +9,8 @@
   },
   "files": [
     "dist",
-    "CHARS.md",
-    "xenpaper.peggy"
+    "docs/CHARS.md",
+    "src/xenpaper.peggy"
   ],
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -21,7 +21,7 @@
     }
   },
   "scripts": {
-    "generate": "peggy --format es xenpaper.peggy -o parser.generated.js",
+    "generate": "peggy --format es src/xenpaper.peggy -o src/parser.generated.js",
     "build": "npm run generate && tsc -p tsconfig.build.json && node scripts/copy-parser.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings .",

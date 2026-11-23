@@ -31,7 +31,7 @@ if ('score' in result) {
 
 `parse()` calls the generated Peggy parser, collects source comments, and throws
 a Peggy syntax error for invalid source. Runtime stages return diagnostics for
-semantic errors. See the [public exports](index.ts).
+semantic errors. See the [public exports](src/index.ts).
 Staff notation and audio scheduling are separate projections of the parsed
 source. `evaluateScoreShape()` produces an abstract, exact-duration notation
 tree; dynamics remain zero-duration annotations and velocity never changes a
@@ -438,14 +438,14 @@ not use an epsilon; approximate comparison is explicit.
 
 ## Generated parser
 
-Edit the [Peggy grammar](xenpaper.peggy) and regenerate `parser.generated.js`
+Edit the [Peggy grammar](src/xenpaper.peggy) and regenerate `parser.generated.js`
 with the following command.
 
 ```sh
 npm run generate
 ```
 
-`parser.generated.d.ts` is maintained alongside the grammar and describes the
+`src/parser.generated.d.ts` is maintained alongside the grammar and describes the
 syntax tree returned to TypeScript callers.
 
 ## Directive extensions
@@ -472,7 +472,7 @@ parameters without adding those concepts to Xenpaper itself.
 
 ## Tests
 
-The unit tests in [`__test__/`](__test__/) cover the grammar, exact values,
+The unit tests in [`src/__test__/`](src/__test__/) cover the grammar, exact values,
 literal and expression evaluation, repeat expansion, score shaping, directives,
 beat events, and staff notation. The Xenpaper 3 repository also exercises the
 language against the example scores in its DAW tutorial.

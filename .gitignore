@@ -156,5 +156,5 @@ vite.config.ts.timestamp-*
 .nx/workspace-data
 .nx/migrate-runs
 
-# Generated from xenpaper.peggy
-/parser.generated.js
+# Generated from src/xenpaper.peggy
+/src/parser.generated.js
