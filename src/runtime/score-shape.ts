@@ -27,7 +27,7 @@ export function evaluateProgramShape(
     evaluateScoreSemantics(
       {
         type: 'Sequence',
-        items: program.body,
+        items: program.body.flatMap((item) => (item.type === 'Sequence' ? item.items : [item])),
         location: program.location,
       } as Expression,
       options,

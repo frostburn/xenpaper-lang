@@ -31,6 +31,36 @@
   const sequence = (items, loc = location()) =>
     items.length === 1 ? items[0] : node('Sequence', { items }, loc);
 
+  const statementTypes = new Set([
+    'VariableDeclaration', 'FunctionDeclaration', 'BindingAssignment',
+    'IfBlock', 'ForBlock', 'WhileBlock', 'LoopJump', 'ThrowStatement',
+  ]);
+
+  // Scoped score parsing owns repeats and parallel branches. Expose statements
+  // directly in the surrounding body without taking apart those expressions.
+  const appendStatements = (body, expression) => {
+    if (!expression) return;
+    if (expression.type !== 'Sequence' || !expression.items.some(item => statementTypes.has(item.type))) {
+      body.push(expression);
+      return;
+    }
+    let items = [];
+    const flush = () => {
+      if (!items.length) return;
+      body.push(sequence(items, { ...items[0].location, end: items.at(-1).location.end }));
+      items = [];
+    };
+    for (const item of expression.items) {
+      if (statementTypes.has(item.type)) {
+        flush();
+        body.push(item);
+      } else {
+        items.push(item);
+      }
+    }
+    flush();
+  };
+
   const implicitRepeats = new WeakSet();
 
   const prependImplicitRepeatScope = (expression, prefix) => {
@@ -87,17 +117,23 @@ Start
 
 DocumentBody
   = first:ScopedParallelExpression?
-    rest:(Spacing boundary:HardBoundary Spacing next:ScopedParallelExpression? {
+    rest:(Spacing boundary:StatementBoundary Spacing next:ScopedParallelExpression? {
       return { boundary, next };
     })* {
       const body = [];
-      if (first) body.push(first);
+      appendStatements(body, first);
       for (const part of rest) {
-        body.push(part.boundary);
-        if (part.next) body.push(part.next);
+        if (part.boundary) body.push(part.boundary);
+        appendStatements(body, part.next);
       }
       return body;
     }
+
+StatementBoundary
+  = HardBoundary / (StatementDelimiter { return null; })
+
+StatementDelimiter
+  = "$"
 
 ParallelExpression
   = first:SequenceExpression
@@ -456,22 +492,31 @@ RepeatExpression
     }
 
 RepeatEndings
-  = Spacing first:FirstEndingMarker Spacing firstBody:EndingParallelExpression?
-    rest:(Spacing marker:NextEndingMarker Spacing body:EndingParallelExpression? {
-      return { ...marker, body: body ? [body] : [] };
+  = Spacing first:FirstEndingMarker Spacing firstBody:EndingBody
+    rest:(Spacing marker:NextEndingMarker Spacing body:EndingBody {
+      return { ...marker, body };
     })*
     Spacing terminal:("||" / "|" / !. { return null; }) {
-      return { endings: [{ ...first, body: firstBody ? [firstBody] : [] }, ...rest], terminal, incomplete: false };
+      return { endings: [{ ...first, body: firstBody }, ...rest], terminal, incomplete: false };
     }
-  / Spacing first:FirstEndingMarker Spacing firstBody:EndingParallelExpression?
+  / Spacing first:FirstEndingMarker Spacing firstBody:EndingBody
     Spacing terminal:":|" {
       return {
-        endings: [{ ...first, body: firstBody ? [firstBody] : [] }],
+        endings: [{ ...first, body: firstBody }],
         terminal,
         incomplete: true,
       };
     }
   / Spacing ":|" { return { endings: [], terminal: ":|", incomplete: false }; }
+
+EndingBody
+  = first:EndingParallelExpression?
+    rest:(Spacing StatementDelimiter Spacing next:EndingParallelExpression? { return next; })* {
+      const body = [];
+      appendStatements(body, first);
+      for (const item of rest) appendStatements(body, item);
+      return body;
+    }
 
 EndingParallelExpression
   // A repeat-end marker gives us an unambiguous stopping point, so ordinary
@@ -513,14 +558,14 @@ EndingNumber
 
 RepeatBody
   = first:ParallelExpression?
-    rest:(Spacing boundary:HardBoundary Spacing next:ParallelExpression? {
+    rest:(Spacing boundary:StatementBoundary Spacing next:ParallelExpression? {
       return { boundary, next };
     })* {
       const body = [];
-      if (first) body.push(first);
+      appendStatements(body, first);
       for (const part of rest) {
-        body.push(part.boundary);
-        if (part.next) body.push(part.next);
+        if (part.boundary) body.push(part.boundary);
+        appendStatements(body, part.next);
       }
       return body;
     }
@@ -843,9 +888,21 @@ CallArguments
 // parallel branches receive child scopes. Shadowing is permitted; recursion is
 // deliberately rejected by the evaluator.
 VariableDeclaration
-  = "let" !IdentifierContinue RequiredSpacing name:LocatedIdentifier Spacing "<-" Spacing value:Expression {
+  = "let" !IdentifierContinue RequiredSpacing name:LocatedIdentifier Spacing "<-" Spacing value:DeclarationValue {
       return node('VariableDeclaration', { name, value });
     }
+
+// A newline can end the initializer between score items. An expression can
+// still consume newlines itself, for example inside parentheses or after an operator.
+DeclarationValue
+  = first:Expression
+    rest:([ \t]* !StatementStart item:Expression { return item; })* {
+      return sequence([first, ...rest]);
+    }
+
+StatementStart
+  = ("let" / "fn" / "ret" / "throw" / "if" / "for" / "while" / "break" / "continue") !IdentifierContinue
+  / LocatedIdentifier Spacing "<-"
 
 BindingAssignment
   = name:LocatedIdentifier Spacing "<-" Spacing value:Expression {
@@ -889,8 +946,8 @@ CoercionAnnotation
     }
 
 FunctionBody
-  = "{" Spacing statements:(statement:FunctionStatement Spacing { return statement; })*
-    returnStatement:ReturnStatement Spacing "}" {
+  = "{" Spacing statements:(statement:FunctionStatement Spacing (StatementDelimiter Spacing)? { return statement; })*
+    returnStatement:ReturnStatement Spacing (StatementDelimiter Spacing)? "}" {
       return node('FunctionBody', { statements, returnStatement });
     }
 

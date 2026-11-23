@@ -54,10 +54,10 @@ describe('global grid context', () => {
   })
 
   it.each([
-    ['if(true) { let chosen <- true @2 . }'],
+    ['if(true) { let chosen <- true $ @2 . }'],
     ['for(chosen in [C D]) { if(chosen @eq 1) { @2 . } }'],
     ['for(chosen of [true]) { @2 . }'],
-    ['while(chosen @eq false) { let chosen <- true @2 . }'],
+    ['while(chosen @eq false) { let chosen <- true $ @2 . }'],
   ])('restores outer bindings in the timeline after %s', (block) => {
     const initialization = initialize(`let chosen <- false ${block} .`)
     const phrase = 'if(chosen) { C } else { D }'

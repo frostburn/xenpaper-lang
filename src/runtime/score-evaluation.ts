@@ -1231,6 +1231,10 @@ export function evaluateScoreSemantics(
       diagnostics = expanded.diagnostics
       if (!expanded.program) return { diagnostics }
       body = { ...body, items: expanded.program.body as unknown as Expression[] }
+    } else {
+      const items: Expression[] = []
+      appendRepeatItems(items, body.items)
+      body = { ...body, items }
     }
 
     const evaluated = visitor.visit(body, { subdivisionContext: visitor.scope.resolve })

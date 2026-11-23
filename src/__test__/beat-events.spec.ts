@@ -28,6 +28,29 @@ const audibleResult = (source: string) => {
 }
 
 describe('beat event expansion', () => {
+  it.each([
+    'let foo <- 1 $ let bar <- 2 3 $ foo bar',
+    'let foo <- 1\nlet bar <- 2 3\n\nfoo bar',
+    'let foo <- 1\nlet bar <- (\n  2\n  3\n)\n\nfoo bar',
+    'let foo <- 1 # comment\r\nlet bar <- 2 3\r\nfoo bar $',
+    'fn phrase() { let bar <- 2 3 $ ret 1 bar $ } $ phrase()',
+    'if(true) { let bar <- 2 3 $ 1 bar $ }',
+  ])('plays 1 2 3 with delimited declarations in %s', (source) => {
+    const result = score(source)
+    expect(result.duration.toFraction()).toBe('3')
+    expect(
+      result.events.map((event) =>
+        event.kind === 'note'
+          ? [event.start.toFraction(), event.duration.toFraction(), event.pitch.value.valueOf()]
+          : event.kind,
+      ),
+    ).toEqual([
+      ['0', '1', 100],
+      ['1', '1', 200],
+      ['2', '1', 300],
+    ])
+  })
+
   it.each(['cps((1 3 5 7), 2)', 'eulerGenus(45)'])(
     'supports sequential, slotted, and parallel playback of %s',
     (source) => {
@@ -179,11 +202,11 @@ describe('beat event expansion', () => {
     ['(1 2 3) ==', ['0', '1', '2'], ['1', '1', '3'], '5'],
     ['((1 2) 3)==', ['0', '1', '2'], ['1', '1', '3'], '5'],
     ['(1 2 3)== 4', ['0', '1', '2', '5'], ['1', '1', '3', '1'], '6'],
-    ['let phrase <- (1 2 3) phrase==', ['0', '1', '2'], ['1', '1', '3'], '5'],
+    ['let phrase <- (1 2 3) $ phrase==', ['0', '1', '2'], ['1', '1', '3'], '5'],
     ['fn phrase() { ret (1 2 3) } phrase()==', ['0', '1', '2'], ['1', '1', '3'], '5'],
     ['[1 2 3]==', ['0', '1', '2'], ['1', '1', '1'], '3'],
     ['([1 2 3])==', ['0', '1', '2'], ['1', '1', '1'], '3'],
-    ['let phrase <- [1 2 3] phrase==', ['0', '1', '2'], ['1', '1', '1'], '3'],
+    ['let phrase <- [1 2 3] $ phrase==', ['0', '1', '2'], ['1', '1', '1'], '3'],
     ['(1, 2, 3)==', ['0', '0', '0'], ['3', '3', '3'], '3'],
     ['(1, 2 3)=', ['0', '0', '2'], ['2', '2', '2'], '3'],
     ['[0, 4 7]=!', ['0', '0', '1'], ['2', '2', '1'], '2'],
@@ -315,8 +338,8 @@ describe('beat event expansion', () => {
     ['one-shot state across iterations', '', 'C @velocity(1/4)', 'D'],
     [
       'sequential declarations',
-      'let division <- 2/1',
-      'let division <- division + 1 @subdivision(division) C',
+      'let division <- 2/1 $',
+      'let division <- division + 1 $ @subdivision(division) C',
       'D',
     ],
     ['function declarations', '', 'fn phrase() { ret C D } phrase()', 'phrase()'],
@@ -369,8 +392,8 @@ describe('beat event expansion', () => {
     ['chained implicit repeats', 'C :| D :|', 'C C D C C D'],
     [
       'declarations in alternate endings',
-      '|: C |¹ let interval <- 3/2 interval :|² interval ||',
-      'C let interval <- 3/2 interval C interval ||',
+      '|: C |¹ let interval <- 3/2 $ interval :|² interval ||',
+      'C let interval <- 3/2 $ interval C interval ||',
     ],
   ])('matches the authored expansion for %s', (_description, repeated, authored) => {
     expect(audibleResult(repeated)).toEqual(audibleResult(authored))
