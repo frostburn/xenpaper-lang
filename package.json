@@ -1,0 +1,52 @@
+{
+  "name": "xenpaper-lang",
+  "version": "0.1.0",
+  "description": "Microtonal score language and renderer-independent runtime used by Xenpaper 3",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frostburn/xenpaper-lang.git"
+  },
+  "files": [
+    "dist",
+    "docs/CHARS.md",
+    "src/xenpaper.peggy"
+  ],
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "generate": "peggy --format es src/xenpaper.peggy -o src/parser.generated.js",
+    "build": "npm run generate && tsc -p tsconfig.build.json && node scripts/copy-parser.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --deny-warnings .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "pretest": "npm run generate",
+    "test": "vitest run",
+    "test:watch": "npm run generate && vitest",
+    "test:package": "node scripts/test-package.mjs",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run test:package",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "moment-of-symmetry": "^0.10.0",
+    "peggy": "^5.1.1",
+    "xen-dev-utils": "^0.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.1"
+  },
+  "engines": {
+    "node": "^22.18.0 || ^24.12.0 || >=26.0.0"
+  }
+}

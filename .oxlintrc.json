@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "vitest"],
+  "env": { "browser": false, "node": true },
+  "categories": { "correctness": "error" },
+  "ignorePatterns": ["dist/", "src/parser.generated.js"]
+}
