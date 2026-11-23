@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Visitor, type VisitorEvaluation } from '../runtime/visitor'
+import { Visitor, type VisitorEvaluation } from '../runtime/visitor.js'
 
 describe('Visitor', () => {
   it('derives immutable child scopes from partial overrides', () => {

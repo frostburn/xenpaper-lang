@@ -1,9 +1,9 @@
 import type { Expression } from '../parser.js'
-import type { Diagnostic } from '../diagnostics'
-import { Value } from '../value'
-import { evaluateDeclaration, evaluateExpression, isTruthy } from './expressions'
-import { extendLexicalEnvironment } from './types'
-import type { EvaluatedLiteral, LexicalEnvironment, PitchContext, PrimeMapping } from './types'
+import type { Diagnostic } from '../diagnostics.js'
+import { Value } from '../value.js'
+import { evaluateDeclaration, evaluateExpression, isTruthy } from './expressions.js'
+import { extendLexicalEnvironment } from './types.js'
+import type { EvaluatedLiteral, LexicalEnvironment, PitchContext, PrimeMapping } from './types.js'
 
 export type FunctionBindings = WeakMap<LexicalEnvironment, Map<string, EvaluatedLiteral>>
 

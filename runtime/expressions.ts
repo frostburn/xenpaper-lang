@@ -1,21 +1,21 @@
 import { parse, type Expression, type FunctionParameter } from '../parser.js'
 import { Fraction, mmod } from 'xen-dev-utils/fraction'
-import type { Diagnostic } from '../diagnostics'
-import { Value } from '../value'
-import { evaluateBuiltinArgument, evaluateBuiltinCall, requireInteger } from './builtins'
-import { evaluateLiteral, type NumericLiteralNode } from './literals'
-import { executeFunctionStatements, type FunctionBindings } from './function-statements'
-import { expandHarmonicSegment } from './harmonic-segments'
-import { equaveShift as modifierEquaveShift, equaveShifts } from './pitch-modifiers'
+import type { Diagnostic } from '../diagnostics.js'
+import { Value } from '../value.js'
+import { evaluateBuiltinArgument, evaluateBuiltinCall, requireInteger } from './builtins.js'
+import { evaluateLiteral, type NumericLiteralNode } from './literals.js'
+import { executeFunctionStatements, type FunctionBindings } from './function-statements.js'
+import { expandHarmonicSegment } from './harmonic-segments.js'
+import { equaveShift as modifierEquaveShift, equaveShifts } from './pitch-modifiers.js'
 import type {
   EvaluatedLiteral,
   LexicalEnvironment,
   PitchOffsetValue,
   ScalarValue,
   SourceOrigin,
-} from './types'
-import type { PitchContext, PrimeMapping } from './types'
-import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment } from './types'
+} from './types.js'
+import type { PitchContext, PrimeMapping } from './types.js'
+import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment } from './types.js'
 import {
   createPitchContext,
   DEFAULT_PITCH_CONTEXT,
@@ -28,7 +28,7 @@ import {
   spellPitchDifference,
   transposePitchSpelling,
   requirePitchOperator,
-} from './pitches'
+} from './pitches.js'
 
 const MOS_HALF_ALTERATIONS: Readonly<Record<string, number>> = {
   '&': 2,

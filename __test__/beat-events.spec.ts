@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Fraction } from 'xen-dev-utils/fraction'
 import { parse } from '../parser.js'
-import { expandToBeatEvents } from '../runtime/beat-events'
+import { expandToBeatEvents } from '../runtime/beat-events.js'
 
 const score = (source: string) => {
   const result = expandToBeatEvents(parse(source))

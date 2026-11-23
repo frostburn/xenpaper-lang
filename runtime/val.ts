@@ -1,8 +1,8 @@
 import { valueToEquaveDivision } from 'xen-dev-utils/conversion'
 import { Fraction } from 'xen-dev-utils/fraction'
 import { PRIMES } from 'xen-dev-utils/primes'
-import { Value } from '../value'
-import type { PrimeMapping } from './types'
+import { Value } from '../value.js'
+import type { PrimeMapping } from './types.js'
 
 function primeAtWart(wart: string): number {
   const index = wart.toLowerCase().charCodeAt(0) - 97

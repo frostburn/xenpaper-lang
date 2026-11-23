@@ -9,9 +9,9 @@ import type {
   RealLiteral,
   RatioLiteral,
 } from '../parser.generated.js'
-import type { Diagnostic } from '../diagnostics'
-import { Value } from '../value'
-import type { EvaluatedLiteral } from './types'
+import type { Diagnostic } from '../diagnostics.js'
+import { Value } from '../value.js'
+import type { EvaluatedLiteral } from './types.js'
 
 export type NumericLiteralNode =
   | DecimalLiteral

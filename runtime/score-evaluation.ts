@@ -1,7 +1,7 @@
 import { Fraction } from 'xen-dev-utils/fraction'
 import type { Expression, Node } from '../parser.generated.js'
-import type { Diagnostic } from '../diagnostics'
-import { Value } from '../value'
+import type { Diagnostic } from '../diagnostics.js'
+import { Value } from '../value.js'
 import {
   evaluateDeclaration,
   evaluateExpression,
@@ -9,22 +9,22 @@ import {
   isTruthy,
   preludeEnvironment,
   prepareFunctionCall,
-} from './expressions'
-import { expandRepeats } from './repeat-expansion'
-import { expandHarmonicSegment } from './harmonic-segments'
-import type { ExpressionEvaluationResult } from './expressions'
-import { DYNAMIC_VELOCITIES, resolveDirective } from './directives'
-import { Visitor, type VisitorEvaluation } from './visitor'
-import { contextAt } from './initialization'
-import { materializeScoreContinuations, tieScoreShapes } from './ties'
-import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment } from './types'
+} from './expressions.js'
+import { expandRepeats } from './repeat-expansion.js'
+import { expandHarmonicSegment } from './harmonic-segments.js'
+import type { ExpressionEvaluationResult } from './expressions.js'
+import { DYNAMIC_VELOCITIES, resolveDirective } from './directives.js'
+import { Visitor, type VisitorEvaluation } from './visitor.js'
+import { contextAt } from './initialization.js'
+import { materializeScoreContinuations, tieScoreShapes } from './ties.js'
+import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment } from './types.js'
 import {
   DEFAULT_PITCH_CONTEXT,
   applyPitchContextChange,
   evaluatePitchLiteral,
   mapFormula,
   normalizeStaffAccidental,
-} from './pitches'
+} from './pitches.js'
 import type {
   AttackShape,
   EvaluatedLiteral,
@@ -45,7 +45,7 @@ import type {
   LexicalEnvironment,
   ScoreShapeEvaluationResult,
   ScoreVisitorContext,
-} from './types'
+} from './types.js'
 
 interface PlaybackAttackShape extends AttackShape {
   readonly dynamic: DynamicMark

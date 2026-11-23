@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { Fraction } from 'xen-dev-utils/fraction'
 import { parse, type Expression } from '../parser.js'
-import { evaluateDeclaration, evaluateExpression } from '../runtime/expressions'
-import { fjsInflection, groupFjsInflections } from '../runtime/fjs'
+import { evaluateDeclaration, evaluateExpression } from '../runtime/expressions.js'
+import { fjsInflection, groupFjsInflections } from '../runtime/fjs.js'
 import {
   DEFAULT_PITCH_CONTEXT,
   applyPitchContextChange,
   edoMapping,
   spellIntervalFormula,
-} from '../runtime/pitches'
-import { Value } from '../value'
+} from '../runtime/pitches.js'
+import { Value } from '../value.js'
 
 function expression(source: string): Expression {
   const directive = parse(`@test(${source})`).body[0]

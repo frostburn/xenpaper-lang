@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from '../parser.js'
-import { expandRepeats } from '../runtime/repeat-expansion'
-import type { ExpandedNode } from '../runtime/types'
+import { expandRepeats } from '../runtime/repeat-expansion.js'
+import type { ExpandedNode } from '../runtime/types.js'
 
 function body(source: string, expansionLimit?: number): readonly ExpandedNode[] {
   const result = expandRepeats(parse(source), { expansionLimit })

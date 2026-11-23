@@ -1,7 +1,7 @@
-import { Value } from '../value'
+import { Value } from '../value.js'
 import { Fraction, mmod } from 'xen-dev-utils/fraction'
-import { groupFjsInflections } from './fjs'
-import { normalizeStaffAccidental, spellIntervalFormula } from './pitches'
+import { groupFjsInflections } from './fjs.js'
+import { normalizeStaffAccidental, spellIntervalFormula } from './pitches.js'
 import type {
   EvaluatedLiteral,
   FrequencyPitchValue,
@@ -11,8 +11,8 @@ import type {
   StaffInflection,
   StaffNotationShape,
   StaffPitch,
-} from './types'
-import { flattenScoreSemantics } from './beat-events'
+} from './types.js'
+import { flattenScoreSemantics } from './beat-events.js'
 
 const LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'] as const
 const SEMITONES = [0, 2, 4, 5, 7, 9, 11] as const

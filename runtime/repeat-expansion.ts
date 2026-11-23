@@ -1,12 +1,12 @@
 import type { LocationRange } from 'peggy'
 import type { Program } from '../parser.generated.js'
-import type { Diagnostic } from '../diagnostics'
+import type { Diagnostic } from '../diagnostics.js'
 import type {
   ExpandedNode,
   ExpansionPath,
   RepeatExpansionOptions,
   RepeatExpansionResult,
-} from './types'
+} from './types.js'
 
 const DEFAULT_EXPANSION_LIMIT = 100_000
 

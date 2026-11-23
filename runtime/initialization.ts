@@ -1,7 +1,7 @@
 import { Fraction } from 'xen-dev-utils/fraction'
 import type { Program } from '../parser.generated.js'
-import type { Diagnostic } from '../diagnostics'
-import { evaluateProgramSemantics } from './score-shape'
+import type { Diagnostic } from '../diagnostics.js'
+import { evaluateProgramSemantics } from './score-shape.js'
 import type {
   DirectiveRamp,
   DirectiveRampMarker,
@@ -10,7 +10,7 @@ import type {
   ScoreShapeOptions,
   ScoreVisitorContext,
   TimedScoreContext,
-} from './types'
+} from './types.js'
 
 export function contextAt(initialization: ScoreInitialization | undefined, start: Fraction) {
   const changes = initialization?.changes ?? []

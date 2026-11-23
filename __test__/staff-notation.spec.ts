@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { parse, type Expression } from '../parser.js'
-import { evaluateExpression } from '../runtime/expressions'
-import { constructStaffNotation } from '../runtime/staff-notation'
-import { constructStaffNotationShape } from '../runtime/staff-notation'
-import { evaluateProgramShape, evaluateScoreShape } from '../runtime/score-shape'
+import { evaluateExpression } from '../runtime/expressions.js'
+import { constructStaffNotation } from '../runtime/staff-notation.js'
+import { constructStaffNotationShape } from '../runtime/staff-notation.js'
+import { evaluateProgramShape, evaluateScoreShape } from '../runtime/score-shape.js'
 
 function notation(source: string) {
   const directive = parse(`@test(${source})`).body[0]

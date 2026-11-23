@@ -3,7 +3,7 @@ import { valueToCents } from 'xen-dev-utils/conversion'
 import { Fraction } from 'xen-dev-utils/fraction'
 import { accumulate, toMonzo, type Monzo } from 'xen-dev-utils/monzo'
 import { isPrime, PRIMES } from 'xen-dev-utils/primes'
-import type { FjsSpelling, PrimeMonzo } from './types'
+import type { FjsSpelling, PrimeMonzo } from './types.js'
 
 export type FjsFlavor = '' | 'c' | 'n' | 'q' | 't' | 'h' | 'm' | 'l' | 's'
 

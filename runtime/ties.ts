@@ -1,5 +1,5 @@
 import { Fraction } from 'xen-dev-utils/fraction'
-import type { AttackShape, ContinueShape, ScoreShape, SourceOrigin } from './types'
+import type { AttackShape, ContinueShape, ScoreShape, SourceOrigin } from './types.js'
 
 interface TimedAttack {
   readonly attack: AttackShape

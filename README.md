@@ -1,38 +1,25 @@
 # xenpaper-lang
 
-## Shared rhythm grammars
-
-The pitched and sample languages share document sequencing, parallel branches,
-normalized groups, repeats, rests, continuations, postfix marks, and directives.
-
-Pitch-context blocks also support `tuning *<- factor`. For example,
-`{tuning *<- 102%}` stretches the active scale, prime mapping, equave, ups/lifts,
-and MOS intervals to 102% of their current size in pitch-space while leaving the
-root frequency fixed.
-Callers enumerate sample names when parsing, so the grammars split only for those
-bare event leaves. Without that option, `bd` retains its pitched meaning as B
-half-flat.
-
-```ts
-import { parse } from './index.js'
-
-parse('bd') // B half-flat
-parse('|:@x2 [bd sd] :|, hh', { drumSamples: ['bd', 'sd', 'hh'] })
-```
-
-`xenpaper-lang` is the parser and renderer-independent runtime for Xenpaper 3's
-microtonal score language. It is currently part of this repository rather than
-a separately published package.
+`xenpaper-lang` parses Xenpaper 3's microtonal score language and evaluates
+scores for playback and notation. This standalone package started with the
+[`xenpaper-lang/` directory in Xenpaper 3 at `0f63c46`](https://github.com/frostburn/xenpaper3/tree/0f63c461cc1c6163d9c6271ec48bc8a714a70cbe/xenpaper-lang).
+The [history archive](https://github.com/frostburn/xenpaper-lang/tree/setup/import-language-history) contains the 130 earlier language commits with their original authors and dates.
 
 ## Processing a score
 
-The public exports are collected in [`index.ts`](index.ts). A typical consumer
-parses source and then expands it to exact beat-timed events:
+Install the current development version from GitHub.
+
+```sh
+npm install github:frostburn/xenpaper-lang
+```
+
+Import the public API from `xenpaper-lang` in an ES module. Parse a score and
+expand it to events with exact beat positions and durations.
 
 ```ts
-import { expandToBeatEvents, parse } from './xenpaper-lang'
+import { expandToBeatEvents, parse } from 'xenpaper-lang'
 
-const program = parse(String.raw`{31edo} C E^5 G`)
+const program = parse('{31edo} C E^5 G')
 const result = expandToBeatEvents(program)
 
 if ('score' in result) {
@@ -42,8 +29,9 @@ if ('score' in result) {
 }
 ```
 
-`parse()` is the generated Peggy parser and throws a Peggy syntax error for
-invalid source. Runtime stages return diagnostics for semantic errors.
+`parse()` calls the generated Peggy parser, collects source comments, and throws
+a Peggy syntax error for invalid source. Runtime stages return diagnostics for
+semantic errors. See the [public exports](index.ts).
 Staff notation and audio scheduling are separate projections of the parsed
 source. `evaluateScoreShape()` produces an abstract, exact-duration notation
 tree; dynamics remain zero-duration annotations and velocity never changes a
@@ -57,6 +45,41 @@ articulation and groove, still on a rational grid. Neither API schedules audio
 or converts beats to seconds. `expandRepeats()` is also available for tooling
 that needs source occurrences and their expansion paths.
 
+## Development
+
+From a fresh checkout, use a supported Node.js release (for example, Node 24.12
+or newer in the 24.x line). Install the locked dependencies and run the language
+tests, then build the JavaScript and TypeScript declarations.
+
+```sh
+npm ci
+npm test
+npm run build
+```
+
+`npm run check` checks formatting, lint, and types, runs the language tests,
+and verifies the npm tarball. Use `npm run test:package` to run just the
+tarball check from a separate consumer.
+
+## Shared rhythm grammars
+
+The pitched and sample languages share document sequencing, parallel branches,
+normalized groups, repeats, rests, continuations, postfix marks, and directives.
+Callers enumerate sample names when parsing. Without that option, `bd` retains
+its pitched meaning as B half-flat.
+
+```ts
+import { parse } from 'xenpaper-lang'
+
+parse('bd') // B half-flat
+parse('|:@x2 [bd sd] :|, hh', { drumSamples: ['bd', 'sd', 'hh'] })
+```
+
+Pitch-context blocks also support `tuning *<- factor`. For example,
+`{tuning *<- 102%}` stretches the active scale, prime mapping, equave, ups/lifts,
+and MOS intervals to 102% of their current size in pitch-space while leaving the
+root frequency fixed.
+
 ## Global grid context
 
 `evaluateInitialization()` compiles an enclosing zero-duration source, or a
@@ -66,6 +89,8 @@ exact `Fraction`; global context is selected at each expression's absolute grid
 position, before evaluation. Local groups and function calls retain their scopes.
 
 ```ts
+import { evaluateInitialization, expandToBeatEvents, parse } from 'xenpaper-lang'
+
 const global = evaluateInitialization(parse('{19edo};{12edo}'), {
   allowDuration: true,
   timeSignature: { numerator: 4, denominator: 4 },
@@ -413,11 +438,11 @@ not use an epsilon; approximate comparison is explicit.
 
 ## Generated parser
 
-Edit [`xenpaper.peggy`](xenpaper.peggy), not `parser.generated.js`. Generate the
-ignored parser artifact with:
+Edit the [Peggy grammar](xenpaper.peggy) and regenerate `parser.generated.js`
+with the following command.
 
 ```sh
-npm run compile:xenpaper-lang
+npm run generate
 ```
 
 `parser.generated.d.ts` is maintained alongside the grammar and describes the
@@ -449,11 +474,8 @@ parameters without adding those concepts to Xenpaper itself.
 
 The unit tests in [`__test__/`](__test__/) cover the grammar, exact values,
 literal and expression evaluation, repeat expansion, score shaping, directives,
-beat events, and staff notation. Run them from the repository root:
-
-```sh
-npm run test:unit -- --run
-```
+beat events, and staff notation. The Xenpaper 3 repository also exercises the
+language against the example scores in its DAW tutorial.
 
 ## Signal ramps
 

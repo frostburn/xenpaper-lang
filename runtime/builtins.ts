@@ -1,10 +1,10 @@
 import { kCombinations } from 'xen-dev-utils'
 import type { CoercionAnnotation, Expression } from '../parser.js'
-import { Value } from '../value'
-import type { ExpressionEvaluationResult } from './expressions'
-import { evaluateLiteral } from './literals'
-import type { EvaluatedLiteral, LexicalEnvironment } from './types'
-import { extendLexicalEnvironment } from './types'
+import { Value } from '../value.js'
+import type { ExpressionEvaluationResult } from './expressions.js'
+import { evaluateLiteral } from './literals.js'
+import type { EvaluatedLiteral, LexicalEnvironment } from './types.js'
+import { extendLexicalEnvironment } from './types.js'
 
 export type ExpressionEvaluator = (
   node: Expression,

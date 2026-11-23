@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { Fraction } from 'xen-dev-utils/fraction'
 import { parse, type Expression, type PitchContextChange } from '../parser.js'
-import { applyPitchContextChange } from '../runtime/pitches'
-import { evaluateScoreShape } from '../runtime/score-shape'
-import type { ParallelShape, ScoreShape, SequenceShape } from '../runtime/types'
-import { Value } from '../value'
-import { parseVal, valMapping } from '../runtime/val'
+import { applyPitchContextChange } from '../runtime/pitches.js'
+import { evaluateScoreShape } from '../runtime/score-shape.js'
+import type { ParallelShape, ScoreShape, SequenceShape } from '../runtime/types.js'
+import { Value } from '../value.js'
+import { parseVal, valMapping } from '../runtime/val.js'
 
 function shape(source: string, pulse: Fraction | number = 1): ScoreShape {
   const node = parse(source).body[0] as Expression

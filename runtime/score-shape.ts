@@ -1,9 +1,9 @@
 import type { Expression, Program } from '../parser.generated.js'
-import { expandRepeats } from './repeat-expansion'
-import { evaluateScoreSemantics } from './score-evaluation'
-import type { ScoreShape, ScoreShapeEvaluationResult, ScoreShapeOptions } from './types'
+import { expandRepeats } from './repeat-expansion.js'
+import { evaluateScoreSemantics } from './score-evaluation.js'
+import type { ScoreShape, ScoreShapeEvaluationResult, ScoreShapeOptions } from './types.js'
 
-export type { ScoreShapeEvaluationResult, ScoreShapeOptions } from './types'
+export type { ScoreShapeEvaluationResult, ScoreShapeOptions } from './types.js'
 
 /**
  * Build the abstract, duration-bearing tree used for staff notation.

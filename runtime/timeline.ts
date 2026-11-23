@@ -1,7 +1,7 @@
 import { Fraction, type FractionValue } from 'xen-dev-utils/fraction'
 import type { Program } from '../parser.generated.js'
-import { evaluateInitialization } from './initialization'
-import type { ScoreShapeOptions } from './types'
+import { evaluateInitialization } from './initialization.js'
+import type { ScoreShapeOptions } from './types.js'
 
 export interface GridTempoChange {
   readonly beat: Fraction

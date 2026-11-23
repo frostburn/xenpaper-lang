@@ -11,10 +11,10 @@ import type {
   MosDeclaration,
   SignatureDeclaration,
 } from '../parser.generated.js'
-import type { Diagnostic } from '../diagnostics'
-import { Value } from '../value'
-import { applyFjsInflections, fjsPrimeComma, groupFjsInflections } from './fjs'
-import { evaluateExpression, prepareFunctionCall } from './expressions'
+import type { Diagnostic } from '../diagnostics.js'
+import { Value } from '../value.js'
+import { applyFjsInflections, fjsPrimeComma, groupFjsInflections } from './fjs.js'
+import { evaluateExpression, prepareFunctionCall } from './expressions.js'
 import type {
   AbsolutePitchValue,
   IntervalSpelling,
@@ -26,9 +26,9 @@ import type {
   MosContext,
   SourceOrigin,
   LexicalEnvironment,
-} from './types'
-import { parseVal, valMapping } from './val'
-import { equaveShift, equaveShifts } from './pitch-modifiers'
+} from './types.js'
+import { parseVal, valMapping } from './val.js'
+import { equaveShift, equaveShifts } from './pitch-modifiers.js'
 
 export const DEFAULT_MAPPING: PrimeMapping = {
   id: 'untempered',

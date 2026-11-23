@@ -6,8 +6,8 @@ import {
   expandToBeatEvents,
   gridMeasureBoundaries,
   parse,
-} from '..'
-import type { ScoreInitialization } from '..'
+} from '../index.js'
+import type { ScoreInitialization } from '../index.js'
 
 function initialize(source: string, parent?: ScoreInitialization) {
   const result = evaluateInitialization(parse(source), {

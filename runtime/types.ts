@@ -7,8 +7,8 @@ import type {
   PitchLiteral,
   Program,
 } from '../parser.generated.js'
-import type { Diagnostic } from '../diagnostics'
-import type { Value } from '../value'
+import type { Diagnostic } from '../diagnostics.js'
+import type { Value } from '../value.js'
 import type { LocationRange } from 'peggy'
 import type { Fraction, FractionValue } from 'xen-dev-utils/fraction'
 

@@ -1,6 +1,6 @@
 import type { Expression } from '../parser.js'
-import type { Diagnostic } from '../diagnostics'
-import type { ExpressionEvaluator } from './builtins'
+import type { Diagnostic } from '../diagnostics.js'
+import type { ExpressionEvaluator } from './builtins.js'
 
 const MAX_ENUMERATED_CHORD_SIZE = 10_000n
 

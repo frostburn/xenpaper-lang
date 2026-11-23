@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from '../parser.js'
-import { expandToBeatEvents } from '../runtime/beat-events'
-import { evaluateExpression } from '../runtime/expressions'
-import { evaluateProgramShape } from '../runtime/score-shape'
+import { expandToBeatEvents } from '../runtime/beat-events.js'
+import { evaluateExpression } from '../runtime/expressions.js'
+import { evaluateProgramShape } from '../runtime/score-shape.js'
 
 function score(source: string) {
   const evaluated = expandToBeatEvents(parse(source))

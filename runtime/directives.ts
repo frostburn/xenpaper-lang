@@ -1,9 +1,9 @@
 import { Fraction } from 'xen-dev-utils/fraction'
 import type { Directive, Expression } from '../parser.generated.js'
-import type { Diagnostic } from '../diagnostics'
-import { evaluateExpression } from './expressions'
-import { Value } from '../value'
-import type { DynamicMark, LexicalEnvironment, PitchContext, StaffClef } from './types'
+import type { Diagnostic } from '../diagnostics.js'
+import { evaluateExpression } from './expressions.js'
+import { Value } from '../value.js'
+import type { DynamicMark, LexicalEnvironment, PitchContext, StaffClef } from './types.js'
 
 export const DYNAMIC_VELOCITIES: Readonly<Record<DynamicMark, Fraction>> = {
   ppp: new Fraction(1, 10),

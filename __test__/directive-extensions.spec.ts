@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from '../parser.js'
-import { expandToBeatEvents } from '../runtime/beat-events'
-import { evaluateInitialization } from '../runtime/initialization'
-import { evaluateExpression } from '../runtime/expressions'
-import { evaluateScoreShape } from '../runtime/score-shape'
-import type { BeatTimedNoteEvent, DirectiveExtension, PitchContext } from '../runtime/types'
-import { DEFAULT_PITCH_CONTEXT } from '../runtime/pitches'
-import { Value } from '../value'
+import { expandToBeatEvents } from '../runtime/beat-events.js'
+import { evaluateInitialization } from '../runtime/initialization.js'
+import { evaluateExpression } from '../runtime/expressions.js'
+import { evaluateScoreShape } from '../runtime/score-shape.js'
+import type { BeatTimedNoteEvent, DirectiveExtension, PitchContext } from '../runtime/types.js'
+import { DEFAULT_PITCH_CONTEXT } from '../runtime/pitches.js'
+import { Value } from '../value.js'
 
 interface MockPatch {
   readonly file: string
@@ -91,7 +91,7 @@ describe('second-party directive extensions', () => {
     (childSource) => {
       const initialize = (
         source: string,
-        initialization?: import('../runtime/types').ScoreInitialization,
+        initialization?: import('../runtime/types.js').ScoreInitialization,
       ) => {
         const result = evaluateInitialization(parse(source), {
           allowDuration: true,

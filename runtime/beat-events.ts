@@ -1,16 +1,16 @@
 import { Fraction } from 'xen-dev-utils/fraction'
 import type { Program } from '../parser.generated.js'
-import type { Diagnostic } from '../diagnostics'
-import { evaluateProgramSemantics } from './score-shape'
-import { DYNAMIC_VELOCITIES } from './directives'
-import { Visitor, type VisitorEvaluation } from './visitor'
+import type { Diagnostic } from '../diagnostics.js'
+import { evaluateProgramSemantics } from './score-shape.js'
+import { DYNAMIC_VELOCITIES } from './directives.js'
+import { Visitor, type VisitorEvaluation } from './visitor.js'
 import type {
   BeatTimedEvent,
   BeatTimedNoteEvent,
   BeatTimedScore,
   ScoreShape,
   ScoreShapeOptions,
-} from './types'
+} from './types.js'
 
 export type BeatEventExpansionOptions = ScoreShapeOptions
 
@@ -270,13 +270,11 @@ export function flattenScoreSemantics(
       return start.add(current.duration)
     } else {
       const firstEvent = events.length
-      const states = current.branches.map(
-        (): FlatteningState => ({
-          active: [],
-          groove: state.groove,
-          grooveOverride: state.grooveOverride,
-        }),
-      )
+      const states = current.branches.map((): FlatteningState => ({
+        active: [],
+        groove: state.groove,
+        grooveOverride: state.grooveOverride,
+      }))
       current.branches.forEach((branch, index) => visitor.visit(branch, { state: states[index]! }))
       const end = start.add(current.duration)
       for (const branchState of states) {

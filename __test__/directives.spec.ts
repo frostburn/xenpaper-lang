@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { Fraction } from 'xen-dev-utils/fraction'
 import { parse } from '../parser.js'
-import { expandToBeatEvents } from '../runtime/beat-events'
-import type { BeatTimedNoteEvent } from '../runtime/types'
+import { expandToBeatEvents } from '../runtime/beat-events.js'
+import type { BeatTimedNoteEvent } from '../runtime/types.js'
 
 const compile = (source: string) => expandToBeatEvents(parse(source))
 const notes = (source: string) => {

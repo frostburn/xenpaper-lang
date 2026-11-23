@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { Fraction } from 'xen-dev-utils/fraction'
-import { parse } from '../parser'
-import { expandToBeatEvents } from '../runtime/beat-events'
-import { evaluateInitialization } from '../runtime/initialization'
-import { evaluateProgramShape } from '../runtime/score-shape'
-import { constructStaffNotationShape } from '../runtime/staff-notation'
-import type { StaffNotationShape } from '../runtime/types'
+import { parse } from '../parser.js'
+import { expandToBeatEvents } from '../runtime/beat-events.js'
+import { evaluateInitialization } from '../runtime/initialization.js'
+import { evaluateProgramShape } from '../runtime/score-shape.js'
+import { constructStaffNotationShape } from '../runtime/staff-notation.js'
+import type { StaffNotationShape } from '../runtime/types.js'
 
 function score(source: string, options: Parameters<typeof expandToBeatEvents>[1] = {}) {
   const result = expandToBeatEvents(parse(source), options)

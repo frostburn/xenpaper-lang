@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Fraction } from 'xen-dev-utils/fraction'
-import { Value } from '../value'
+import { Value } from '../value.js'
 
 function exactExponents(value: Value): ReadonlyMap<number, unknown> {
   if (value.magnitude.kind !== 'exact') throw new TypeError('Expected an exact value.')
