@@ -237,6 +237,13 @@ describe('directive runtime', () => {
     ])
   })
 
+  it('keeps a clip-local groove in phase when beatOffset is set', () => {
+    const source = '[A B] @groove([@f @. C= @p C]) [D E]'
+    const result = expandToBeatEvents(parse(source), { beatOffset: new Fraction(1, 2) })
+
+    expect(result).toEqual(compile(source))
+  })
+
   it('accepts a plain sequence as the groove template', () => {
     const plain = notes('@groove(C== C) C C C C')
     const normalized = notes('@groove([C== C]===) C C C C')
@@ -315,6 +322,29 @@ describe('directive runtime', () => {
       '0',
       '1/2',
       '2/3',
+    ])
+  })
+
+  it('isolates grooves in a returned function phrase', () => {
+    const events = notes('fn phrase() { ret @groove([C= C]) [D E] } phrase() [F G]')
+
+    expect(events.map(({ start }) => start.toFraction())).toEqual(['0', '2/3', '1', '3/2'])
+  })
+
+  it('ends a drone started by a function at the end of its phrase', () => {
+    const events = notes('fn phrase() { ret @drone(C) D E } phrase() F')
+
+    expect(
+      events.map(({ label, start, duration }) => [
+        label,
+        start.toFraction(),
+        duration.toFraction(),
+      ]),
+    ).toEqual([
+      ['C', '0', '2'],
+      ['D', '0', '1'],
+      ['E', '1', '1'],
+      ['F', '2', '1'],
     ])
   })
 

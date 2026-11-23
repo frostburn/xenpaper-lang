@@ -297,7 +297,8 @@ export function flattenScoreSemantics(
   }
 
   const rootState: FlatteningState = { active: [] }
-  const visitor = new Visitor(evaluate, { start: new Fraction(0), state: rootState })
+  const clipOrigin = new Fraction(0)
+  const visitor = new Visitor(evaluate, { start: clipOrigin, state: rootState })
   const end = visitor.visit(shape)
   stopDrone(rootState, end)
   for (const event of events) {
@@ -311,10 +312,11 @@ export function flattenScoreSemantics(
         ? grooveAt(timeline.grooveChanges, nominalStart.add(beatOffset))
         : undefined)
     if (groove) {
-      const grooveStart = nominalStart.add(beatOffset)
-      const grooveEnd = nominalEnd.add(beatOffset)
-      const warpedStart = interpolateGroove(groove, grooveStart, 'actual').sub(beatOffset)
-      const warpedEnd = interpolateGroove(groove, grooveEnd, 'actual').sub(beatOffset)
+      const grooveOffset = mutable.groove ? clipOrigin : beatOffset
+      const grooveStart = nominalStart.add(grooveOffset)
+      const grooveEnd = nominalEnd.add(grooveOffset)
+      const warpedStart = interpolateGroove(groove, grooveStart, 'actual').sub(grooveOffset)
+      const warpedEnd = interpolateGroove(groove, grooveEnd, 'actual').sub(grooveOffset)
       mutable.start = warpedStart
       mutable.duration = warpedEnd
         .sub(warpedStart)
