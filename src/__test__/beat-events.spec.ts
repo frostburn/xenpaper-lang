@@ -29,6 +29,19 @@ const audibleResult = (source: string) => {
 
 describe('beat event expansion', () => {
   it.each([
+    ['(let motif <- 1 $ motif)', '(let motif <- 1\nmotif)'],
+    ['[let motif <- 1 $ motif]', '[let motif <- 1\nmotif]'],
+    ['[let motif <- 1 2 $ motif 3 $]', '[let motif <- 1 2\nmotif 3]'],
+    ['C $ D :|', 'C D C D'],
+    ['C :| $ D :|', 'C C D C C D'],
+    ['(C $ D :|)', '(C D :|)'],
+    ['[C $ D :|]', '[C D :|]'],
+    ['C || $ D :|', 'C || D D'],
+  ])('preserves score scope across the delimiter in %s', (actual, expected) => {
+    expect(audibleResult(actual)).toEqual(audibleResult(expected))
+  })
+
+  it.each([
     'let foo <- 1 $ let bar <- 2 3 $ foo bar',
     'let foo <- 1\nlet bar <- 2 3\n\nfoo bar',
     'let foo <- 1\nlet bar <- (\n  2\n  3\n)\n\nfoo bar',
