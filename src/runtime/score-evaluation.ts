@@ -1570,12 +1570,15 @@ export function evaluateScoreSemantics(
           loop: undefined,
           subdivisionContext: visitor.scope.resolve,
         })
+        const diagnostics = [...prepared.diagnostics, ...returned.diagnostics]
+        if (!hasShape(returned)) return { diagnostics }
         return {
           ...returned,
-          ...('shape' in returned
-            ? { shape: annotateFunctionCall(returned.shape, origin(current)) }
-            : {}),
-          diagnostics: [...prepared.diagnostics, ...returned.diagnostics],
+          shape: {
+            ...annotateFunctionCall(returned.shape, origin(current)),
+            isolatedDirectiveScope: true,
+          },
+          diagnostics,
         }
       }
     }

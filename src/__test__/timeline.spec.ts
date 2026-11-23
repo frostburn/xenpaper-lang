@@ -33,6 +33,26 @@ function notes(source: string, initialization: ScoreInitialization, offset?: Fra
 }
 
 describe('global grid context', () => {
+  it('keeps the global groove on the absolute grid around a function-local groove', () => {
+    const initialization = initialize('@groove([C= C]) ..')
+    const offset = new Fraction(1, 2)
+    const source = 'fn phrase() { ret @groove([C= C]) [E F] } [C D] phrase() [G A]'
+
+    expect(
+      notes(source, initialization, offset).map(({ start, duration }) => [
+        start.toFraction(),
+        duration.toFraction(),
+      ]),
+    ).toEqual([
+      ['1/6', '1/3'],
+      ['1/2', '2/3'],
+      ['1', '2/3'],
+      ['5/3', '1/3'],
+      ['13/6', '1/3'],
+      ['5/2', '2/3'],
+    ])
+  })
+
   it.each([
     ['if(true) { let chosen <- true @2 . }'],
     ['for(chosen in [C D]) { if(chosen @eq 1) { @2 . } }'],
