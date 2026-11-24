@@ -11,6 +11,10 @@ function body(source: string, expansionLimit?: number): readonly ExpandedNode[] 
   return result.program!.body
 }
 
+const pitchText = (node: ExpandedNode) => (node.type === 'PitchLiteral' ? node.raw : undefined)
+const degreeValue = (node: ExpandedNode) =>
+  node.type === 'DegreeLiteral' ? node.degree : undefined
+
 describe('repeat expansion', () => {
   it('defaults an unmatched repeat end to the start of its scope', () => {
     const implicit = body('C D E :|')
@@ -134,7 +138,7 @@ describe('repeat expansion', () => {
     ).toEqual(['C :|', 'D :|'])
 
     const expanded = expandRepeats(program).program!.body
-    expect(expanded.map((item) => item.raw)).toEqual(['C', 'C', 'D', 'C', 'C', 'D', 'E'])
+    expect(expanded.map(pitchText)).toEqual(['C', 'C', 'D', 'C', 'C', 'D', 'E'])
     expect(expanded[3]!.expansionPath).toEqual([
       { repeatOffset: 5, iteration: 1 },
       { repeatOffset: 0, iteration: 0 },
@@ -222,7 +226,7 @@ describe('repeat expansion', () => {
   })
 
   it('replays earlier sections even when the final written section is silent', () => {
-    expect(body('C :| |:@x0 D :| :|').map((item) => item.raw)).toEqual(['C', 'C', 'C', 'C'])
+    expect(body('C :| |:@x0 D :| :|').map(pitchText)).toEqual(['C', 'C', 'C', 'C'])
   })
 
   it('bounds notation replay for chained repeat ends', () => {
@@ -248,13 +252,12 @@ describe('repeat expansion', () => {
 
   it('keeps a repeated parallel branch grouped as one branch', () => {
     const [parallel] = body('C, |:@x2 D :|')
-    const branches = parallel!.branches as ExpandedNode[]
+    if (parallel?.type !== 'Parallel') throw new Error('Expected parallel branches.')
+    const branches = parallel.branches
 
     expect(branches.map((branch) => branch.type)).toEqual(['PitchLiteral', 'Sequence'])
-    expect((branches[1]!.items as ExpandedNode[]).map((item) => item.type)).toEqual([
-      'PitchLiteral',
-      'PitchLiteral',
-    ])
+    if (branches[1]?.type !== 'Sequence') throw new Error('Expected a repeated branch.')
+    expect(branches[1].items.map((item) => item.type)).toEqual(['PitchLiteral', 'PitchLiteral'])
   })
 
   it('retains the same source location across expanded occurrences', () => {
@@ -268,6 +271,24 @@ describe('repeat expansion', () => {
   })
 
   it.each([
+    ['C :|', ''],
+    ['|: C :|', '|:'],
+  ])('locates the start of %s in current and saved trees', (source, expected) => {
+    const program = parse(source)
+    const repeat = program.body[0]
+    if (repeat?.type !== 'Repeat') throw new Error('Expected a repeat.')
+    const startText = () => {
+      const expanded = expandRepeats(program, { preserveBarlines: true }).program
+      const first = expanded?.body[0]
+      if (first?.type !== 'Barline') throw new Error('Expected an opening boundary.')
+      return source.slice(first.location.start.offset, first.location.end.offset)
+    }
+    expect(startText()).toBe(expected)
+    delete repeat.startMarkerLocation
+    expect(startText()).toBe(expected)
+  })
+
+  it.each([
     ['|: 1 2 |@^1 3 4 :|@^2 5 6 ||', ['1', '2', '3', '4', '1', '2', '5', '6']],
     [
       '|:ˣ³ 1 2 |¹ 3 4 :|² 5 6 :|³ 7 8 ||',
@@ -277,8 +298,10 @@ describe('repeat expansion', () => {
     const degrees = (nodes: readonly ExpandedNode[]): string[] =>
       nodes.flatMap((node) =>
         node.type === 'DegreeLiteral'
-          ? [node.degree as string]
-          : degrees((node.items as ExpandedNode[] | undefined) ?? []),
+          ? [node.degree]
+          : node.type === 'Sequence'
+            ? degrees(node.items)
+            : [],
       )
 
     expect(degrees(body(source))).toEqual(expected)
@@ -337,8 +360,10 @@ describe('repeat expansion', () => {
     const pitches = (nodes: readonly ExpandedNode[]): string[] =>
       nodes.flatMap((node) =>
         node.type === 'PitchLiteral'
-          ? [node.raw as string]
-          : pitches((node.items as ExpandedNode[] | undefined) ?? []),
+          ? [node.raw]
+          : node.type === 'Sequence'
+            ? pitches(node.items)
+            : [],
       )
 
     expect(pitches(body(source))).toEqual([
@@ -362,31 +387,13 @@ describe('repeat expansion', () => {
     const repeat = parse(source).body[0]
 
     expect(repeat).toMatchObject({ type: 'Repeat', terminal: null })
-    expect(body(source).map((node) => node.degree as string)).toEqual([
-      '1',
-      '2',
-      '3',
-      '4',
-      '1',
-      '2',
-      '5',
-      '6',
-    ])
+    expect(body(source).map(degreeValue)).toEqual(['1', '2', '3', '4', '1', '2', '5', '6'])
   })
 
   it('allows an omitted initial repeat marker', () => {
     const source = '0 1 |¹ 2 3 :|² 4 5 ||'
 
-    expect(body(source).map((node) => node.degree as string)).toEqual([
-      '0',
-      '1',
-      '2',
-      '3',
-      '0',
-      '1',
-      '4',
-      '5',
-    ])
+    expect(body(source).map(degreeValue)).toEqual(['0', '1', '2', '3', '0', '1', '4', '5'])
   })
 
   it('continues after implicit-start alternate endings', () => {
@@ -426,15 +433,6 @@ describe('repeat expansion', () => {
     const source = `0 1 |¹ 2 3 :|
         |² 4 5 ||`
 
-    expect(body(source).map((node) => node.degree as string)).toEqual([
-      '0',
-      '1',
-      '2',
-      '3',
-      '0',
-      '1',
-      '4',
-      '5',
-    ])
+    expect(body(source).map(degreeValue)).toEqual(['0', '1', '2', '3', '0', '1', '4', '5'])
   })
 })

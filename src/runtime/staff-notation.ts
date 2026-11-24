@@ -322,6 +322,7 @@ function appearanceKey(pitch: StaffPitch): string {
 
 /** Project a duration-bearing score tree, including rests, into staff data. */
 export function constructStaffNotationShape(shape: ScoreShape): StaffNotationShape {
+  const base = { duration: shape.duration, origins: shape.origins }
   switch (shape.kind) {
     case 'attack': {
       const pitch = constructStaffNotation(shape.pitch, {
@@ -338,7 +339,7 @@ export function constructStaffNotationShape(shape: ScoreShape): StaffNotationSha
       return {
         kind: 'note',
         pitch: ambiguous ? { ...pitch, notehead: 'x' } : pitch,
-        duration: shape.duration,
+        ...base,
         ...(shape.displayLabel ? { displayLabel: shape.displayLabel } : {}),
         ...(shape.justIntonation ? { justIntonation: true } : {}),
         ...(shape.grace ? { grace: true } : {}),
@@ -368,34 +369,43 @@ export function constructStaffNotationShape(shape: ScoreShape): StaffNotationSha
       }
     }
     case 'rest':
-      return { kind: 'rest', duration: shape.duration, generated: shape.generated }
+      return { kind: 'rest', ...base, generated: shape.generated }
     case 'continue':
       return {
         kind: 'continue',
-        duration: shape.duration,
+        ...base,
         ...(shape.extendsAutomation === false ? { extendsAutomation: false } : {}),
       }
     case 'barline':
       return {
         kind: 'barline',
         style: shape.style,
-        duration: shape.duration,
+        ...base,
         endingNumber: shape.endingNumber,
       }
     case 'annotation':
-      return { kind: 'annotation', text: shape.text, duration: shape.duration }
+      return { kind: 'annotation', text: shape.text, ...base }
     case 'dynamic':
-      return { kind: 'dynamic', mark: shape.mark, duration: shape.duration }
+      return { kind: 'dynamic', mark: shape.mark, ...base }
     case 'clef':
-      return { kind: 'clef', clef: shape.clef, duration: shape.duration }
+      return { kind: 'clef', clef: shape.clef, ...base }
     case 'time-signature':
       return {
         kind: 'annotation',
+        marker: shape.kind,
+        numerator: shape.numerator,
+        denominator: shape.denominator,
         text: `${shape.numerator}/${shape.denominator}`,
-        duration: shape.duration,
+        ...base,
       }
     case 'tempo':
-      return { kind: 'annotation', text: `${shape.bpm.toFraction()} bpm`, duration: shape.duration }
+      return {
+        kind: 'annotation',
+        marker: shape.kind,
+        bpm: shape.bpm,
+        text: `${shape.bpm.toFraction()} bpm`,
+        ...base,
+      }
     case 'key-signature':
       return {
         kind: 'key-signature',
@@ -405,11 +415,11 @@ export function constructStaffNotationShape(shape: ScoreShape): StaffNotationSha
             : pitch.spelling
           return constructStaffNotation({ ...pitch, spelling })
         }),
-        duration: shape.duration,
+        ...base,
       }
     case 'groove':
       if (!shape.template || !shape.controlCount)
-        return { kind: 'annotation', text: 'straight', duration: shape.duration }
+        return { kind: 'annotation', text: 'straight', ...base }
       else {
         const flattened = flattenScoreSemantics(shape.template).score
         const notes = flattened.events.filter((event) => event.kind === 'note')
@@ -426,31 +436,31 @@ export function constructStaffNotationShape(shape: ScoreShape): StaffNotationSha
           straightDurations: notes.map(() => flattened.duration.div(notes.length)),
           grooveDurations,
           ...(tuplet > 1 ? { tuplet } : {}),
-          duration: shape.duration,
+          ...base,
         }
       }
     case 'drone':
       return {
         kind: 'annotation',
         text: shape.template ? 'drone' : 'drone off',
-        duration: shape.duration,
+        ...base,
       }
     case 'sequence':
       if (shape.continuationTarget === 'all' && !shape.normalized)
         return {
           kind: 'parallel',
-          duration: shape.duration,
+          ...base,
           branches: [
             {
               kind: 'sequence',
-              duration: shape.duration,
+              ...base,
               children: shape.children.map(constructStaffNotationShape),
             },
           ],
         }
       return {
         kind: 'sequence',
-        duration: shape.duration,
+        ...base,
         children: shape.children.map(constructStaffNotationShape),
         ...(shape.normalized ? { normalized: true } : {}),
         ...(shape.tuplet ? { tuplet: shape.tuplet } : {}),
@@ -458,7 +468,7 @@ export function constructStaffNotationShape(shape: ScoreShape): StaffNotationSha
     case 'parallel':
       return {
         kind: 'parallel',
-        duration: shape.duration,
+        ...base,
         branches: shape.branches.map(constructStaffNotationShape),
       }
   }

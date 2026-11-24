@@ -1,5 +1,5 @@
 export type { Diagnostic, DiagnosticSeverity } from './diagnostics.js'
-export { parse } from './parser.js'
+export { parse, tryParse } from './parser.js'
 export type * from './parser.js'
 export { expandRepeats } from './runtime/repeat-expansion.js'
 export { decimalFraction, evaluateLiteral } from './runtime/literals.js'

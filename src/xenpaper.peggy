@@ -17,13 +17,13 @@
   const unary = (operator, operand, loc = location()) =>
     node('UnaryExpression', { operator, operand }, loc);
 
-  const binary = (operator, left, right, loc = location()) =>
-    node('BinaryExpression', { operator, left, right }, loc);
+  const binary = (operator, left, right) =>
+    node('BinaryExpression', { operator, left, right }, { ...left.location, end: right.location.end });
 
-  const foldBinary = (head, tail, loc = location()) => {
+  const foldBinary = (head, tail) => {
     let result = head;
     for (const part of tail) {
-      result = binary(part.operator, result, part.right, loc);
+      result = binary(part.operator, result, part.right);
     }
     return result;
   };
@@ -101,7 +101,7 @@ ScopedParallelExpression
 
 ImplicitParallelRepeat
   = body:ParallelExpression ending:RepeatEndings !Comma {
-      return node('Repeat', { count: null, body: [body], ...ending });
+      return node('Repeat', { startMarkerLocation: null, count: null, body: [body], ...ending });
     }
 
 ScopedBranches
@@ -115,7 +115,7 @@ ScopedSequenceExpression
 
 ImplicitSequenceRepeat
   = body:SequenceExpression ending:RepeatEndings {
-      return node('Repeat', { count: null, body: [body], ...ending });
+      return node('Repeat', { startMarkerLocation: null, count: null, body: [body], ...ending });
     }
 
 StatementSeparators
@@ -171,10 +171,7 @@ Expression
               end: part.barlines[part.barlines.length - 1].location.end,
             })
           : result;
-        result = binary("->", left, part.right, {
-          ...left.location,
-          end: part.right.location.end,
-        });
+        result = binary("->", left, part.right);
       }
       return result;
     }
@@ -302,9 +299,11 @@ UnaryOperator
   / "√" { return "√"; }
 
 PostfixExpression
-  = expression:PrimaryExpression indexes:("[" Spacing index:ValueExpression Spacing "]" { return index; })* marks:AttachedPostfixMark* {
+  = expression:PrimaryExpression indexes:("[" Spacing index:ValueExpression Spacing "]" { return { index, end: location().end }; })* marks:AttachedPostfixMark* {
       let result = expression;
-      for (const index of indexes) result = node('IndexExpression', { container: result, index });
+      for (const { index, end } of indexes) {
+        result = node('IndexExpression', { container: result, index }, { ...result.location, end });
+      }
       if (!marks.length) return result;
       return node('PostfixExpression', { expression: result, marks });
     }
@@ -456,8 +455,8 @@ HardBoundary
   = "||" { return node('HardBoundary', { raw: "||" }); }
 
 RepeatExpression
-  = "|:" Spacing count:RepeatCount? Spacing body:RepeatBody ending:RepeatEndings {
-      return node('Repeat', { count, body, ...ending });
+  = startMarkerLocation:("|:" { return location(); }) Spacing count:RepeatCount? Spacing body:RepeatBody ending:RepeatEndings {
+      return node('Repeat', { startMarkerLocation, count, body, ...ending });
     }
 
 RepeatEndings

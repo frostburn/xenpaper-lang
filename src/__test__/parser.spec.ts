@@ -1,5 +1,53 @@
 import { describe, expect, it } from 'vitest'
-import { parse } from '../parser.js'
+import { parse, tryParse } from '../parser.js'
+
+describe('parser results for tools', () => {
+  it('returns the same program, comments, and source identity as parse', () => {
+    const file = { name: 'clip.xp', owner: {} }
+    file.owner = file
+    const options = { grammarSource: file, drumSamples: ['kick'] }
+    const source = '|: kick C# :| # chorus'
+    const parsed = tryParse(source, options)
+    expect(parsed).toEqual({ program: parse(source, options), diagnostics: [] })
+    if (!('program' in parsed)) throw new Error('Expected a program.')
+    expect(parsed.program.comments[0]?.location.source).toBe(file)
+  })
+
+  it('reports a located syntax diagnostic and propagates invalid parser options', () => {
+    expect(tryParse('C\n&', { grammarSource: 'clip' })).toMatchObject({
+      diagnostics: [
+        {
+          code: 'XP_SYNTAX',
+          severity: 'error',
+          message: expect.any(String),
+          locations: [
+            { source: 'clip', start: { offset: 2, line: 2, column: 1 }, end: { offset: 3 } },
+          ],
+        },
+      ],
+    })
+    expect(tryParse('let foo <-')).not.toHaveProperty('program')
+    expect(() => parse('C\n&')).toThrow(/Expected/)
+    expect(() => tryParse('C', { startRule: 'missing' })).toThrow(/start/i)
+  })
+
+  it('locates each folded binary expression and index through its own closing bracket', () => {
+    const source = 'foo[1][2] +\n 3 + 4'
+    const root = parse(source).body[0]
+    if (
+      root?.type !== 'BinaryExpression' ||
+      root.left.type !== 'BinaryExpression' ||
+      root.left.left.type !== 'IndexExpression' ||
+      root.left.left.container.type !== 'IndexExpression'
+    )
+      throw new Error('Expected nested operators and indices.')
+    expect(
+      [root, root.left, root.left.left, root.left.left.container].map(({ location }) =>
+        source.slice(location.start.offset, location.end.offset),
+      ),
+    ).toEqual([source, 'foo[1][2] +\n 3', 'foo[1][2]', 'foo[1]'])
+  })
+})
 
 describe('lexical declarations', () => {
   it('preserves the score sequence and its binding boundaries', () => {

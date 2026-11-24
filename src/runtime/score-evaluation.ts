@@ -13,7 +13,11 @@ import {
   evaluateFunctionCall,
   stringValue,
 } from './expressions.js'
-import { expandRepeats, resolveRepeatChain } from './repeat-expansion.js'
+import {
+  expandRepeatsFrom,
+  repeatBoundaryLocation,
+  resolveRepeatChain,
+} from './repeat-expansion.js'
 import { expandHarmonicSegment } from './harmonic-segments.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { DYNAMIC_VELOCITIES, resolveDirective } from './directives.js'
@@ -31,6 +35,7 @@ import {
 import type {
   AttackShape,
   EvaluatedLiteral,
+  ExpansionPath,
   AttackAppearance,
   AnnotationShape,
   BarlineShape,
@@ -85,6 +90,7 @@ function resolveContext(resolver: ContextResolver, base: ScoreVisitorContext): S
 type LoopFrame = { jump?: Extract<Expression, { type: 'LoopJump' }>['action'] }
 
 interface VisitorScope {
+  readonly expansionPath: ExpansionPath
   readonly stopOnError?: boolean
   readonly loop?: LoopFrame
   readonly offset: Fraction
@@ -106,16 +112,32 @@ interface VisitorScope {
   readonly environment?: LexicalEnvironment
 }
 
-type ScoreVisitor = Visitor<Expression, VisitorScope, ScoreShapeEvaluationResult>
+type ScoreExpression = Expression & {
+  readonly expansionPath?: ExpansionPath
+  readonly broadcastArticulation?: Fraction
+}
+type ScoreVisitor = Visitor<ScoreExpression, VisitorScope, ScoreShapeEvaluationResult>
+
+function withOccurrence(shape: ScoreShape, visitor: ScoreVisitor): ScoreShape {
+  const { expansionPath } = visitor.scope
+  return expansionPath.length ? { ...shape, expansionPath } : shape
+}
 
 const MAX_REPEAT_EXPANSION_NODES = 100_000
 
 function mapScoreConstruction(
-  node: Expression,
-  mapLeaf: (leaf: Expression) => Expression,
+  node: ScoreExpression,
+  mapLeaf: (leaf: ScoreExpression) => ScoreExpression,
 ): Expression | undefined {
   if (node.type === 'UnaryExpression' || node.type === 'PitchModifierExpression') {
     return mapScoreConstruction(node.operand, (leaf) => ({ ...node, operand: mapLeaf(leaf) }))
+  }
+  const transformLeaf = (leaf: ScoreExpression): ScoreExpression => {
+    const mapped = mapLeaf(leaf)
+    // A broadcast operation takes its occurrence from the score item it transforms.
+    return leaf.expansionPath && mapped !== leaf
+      ? { ...mapped, expansionPath: leaf.expansionPath }
+      : mapped
   }
   const mapItem = (item: Expression): Expression => {
     const construction = mapScoreConstruction(item, mapLeaf)
@@ -135,7 +157,7 @@ function mapScoreConstruction(
     ) {
       return item
     }
-    return mapLeaf(item)
+    return transformLeaf(item)
   }
   if (node.type === 'BinaryExpression' && node.operator === '->') {
     return { ...node, left: mapItem(node.left), right: mapItem(node.right) }
@@ -174,7 +196,7 @@ function mapScoreConstruction(
   }
   if (node.type === 'PostfixExpression') {
     const expression = mapScoreConstruction(node.expression, mapLeaf)
-    return { ...node, expression: expression ?? mapLeaf(node.expression) }
+    return { ...node, expression: expression ?? transformLeaf(node.expression) }
   }
   return undefined
 }
@@ -288,7 +310,7 @@ function applyBroadcastContinuations(
 function zipScoreConstructions(
   left: Expression,
   right: Expression,
-  combine: (left: Expression, right: Expression) => Expression,
+  combine: (left: ScoreExpression, right: ScoreExpression) => ScoreExpression,
 ): Expression | undefined {
   const zipItems = (leftItems: Expression[], rightItems: Expression[]) => {
     if (leftItems.length !== rightItems.length) return undefined
@@ -358,6 +380,7 @@ function broadcastScalarOperation(
   if (right) return { ...node, right }
   const zipped = zipScoreConstructions(node.left, node.right, (left, right) => ({
     ...node,
+    expansionPath: left.expansionPath?.length ? left.expansionPath : right.expansionPath,
     left,
     right,
   }))
@@ -549,17 +572,7 @@ function repeatMarker(
   edge: 'start' | 'end',
   style: BarlineStyle,
 ): BarlineShape {
-  const width = edge === 'start' ? 2 : (node.terminal?.length ?? 0)
-  const boundary = edge === 'start' ? node.location.start : node.location.end
-  const start =
-    edge === 'start'
-      ? boundary
-      : { ...boundary, offset: boundary.offset - width, column: boundary.column - width }
-  const end =
-    edge === 'start'
-      ? { ...boundary, offset: boundary.offset + width, column: boundary.column + width }
-      : boundary
-  return barline({ ...node, location: { source: node.location.source, start, end } }, style)
+  return barline({ ...node, location: repeatBoundaryLocation(node, edge) }, style)
 }
 
 function endingMarker(
@@ -1138,8 +1151,13 @@ export function evaluateScoreSemantics(
     resultVisitors.set(result, visitor)
     return result
   }
-  const visitorAfter = (result: ScoreShapeEvaluationResult, visitor: ScoreVisitor) =>
-    resultVisitors.get(result) ?? visitor
+  const visitorAfter = (result: ScoreShapeEvaluationResult, visitor: ScoreVisitor) => {
+    const next = resultVisitors.get(result) ?? visitor
+    // A child's prevailing musical state can escape. Its repeat iteration ends at the child.
+    return next.scope.expansionPath === visitor.scope.expansionPath
+      ? next
+      : next.spawn({ expansionPath: visitor.scope.expansionPath })
+  }
 
   const visitorContext = (visitor: ScoreVisitor): ScoreVisitorContext => ({
     tempo: visitor.scope.tempo,
@@ -1173,17 +1191,22 @@ export function evaluateScoreSemantics(
     return visitor.spawn({ ...contextScope(resolveContext(resolve, visitor.scope.base)), resolve })
   }
 
-  const at = (visitor: ScoreVisitor, offset: Fraction): ScoreVisitor => {
+  const at = (
+    visitor: ScoreVisitor,
+    offset: Fraction,
+    expansionPath = visitor.scope.expansionPath,
+  ): ScoreVisitor => {
     let base = visitor.scope.layout
       ? visitor.scope.base
       : (contextAt(options.initialization, offset) ?? visitor.scope.base)
-    if (base === visitor.scope.base) return visitor.spawn({ offset })
+    if (base === visitor.scope.base) return visitor.spawn({ offset, expansionPath })
     if (visitor.scope.lockedPulse && !base.pulse.equals(visitor.scope.lockedPulse))
       base = { ...base, pulse: visitor.scope.lockedPulse }
     return visitor.spawn({
       ...contextScope(resolveContext(visitor.scope.resolve, base)),
       base,
       offset,
+      expansionPath,
     })
   }
 
@@ -1206,7 +1229,7 @@ export function evaluateScoreSemantics(
   }
 
   const withVisitorContext = (shape: ScoreShape, visitor: ScoreVisitor): ScoreShape => ({
-    ...shape,
+    ...withOccurrence(shape, visitor),
     visitorContextChange: visitorContext(visitor),
   })
 
@@ -1224,8 +1247,13 @@ export function evaluateScoreSemantics(
     ])
   }
 
-  const expandBlockRepeats = (body: Extract<Expression, { type: 'Sequence' }>, defer: boolean) =>
-    expandRepeats(
+  const expandBlockRepeats = (
+    body: Extract<Expression, { type: 'Sequence' }>,
+    defer: boolean,
+    path: ExpansionPath,
+  ) =>
+    expandRepeatsFrom(
+      path,
       { type: 'Program', source: '', comments: [], body: body.items, location: body.location },
       { expansionLimit: flowLimit, preserveBarlines: true },
       () => spendFlowBudget(body),
@@ -1240,10 +1268,10 @@ export function evaluateScoreSemantics(
     spendFlowBudget(body)
     let diagnostics: readonly Diagnostic[] = []
     if (playback) {
-      const expanded = expandBlockRepeats(body, deferRepeats)
+      const expanded = expandBlockRepeats(body, deferRepeats, visitor.scope.expansionPath)
       diagnostics = expanded.diagnostics
       if (!expanded.program) return { diagnostics }
-      body = { ...body, items: expanded.program.body as unknown as Expression[] }
+      body = { ...body, items: [...expanded.program.body] }
     } else {
       const items: Expression[] = []
       appendRepeatItems(items, body.items)
@@ -1353,10 +1381,11 @@ export function evaluateScoreSemantics(
     )
   }
 
-  const evaluateNode: VisitorEvaluation<Expression, VisitorScope, ScoreShapeEvaluationResult> = (
-    current,
-    visitor,
-  ) => {
+  const evaluateNode: VisitorEvaluation<
+    ScoreExpression,
+    VisitorScope,
+    ScoreShapeEvaluationResult
+  > = (current, visitor) => {
     const {
       context,
       pulse: currentPulse,
@@ -1726,7 +1755,10 @@ export function evaluateScoreSemantics(
         measure &&
         visitor.scope.offset.sub(measure.origin).div(measure.length).d !== 1
       return {
-        shape: barline(current, current.type === 'Barline' ? 'single' : 'double'),
+        shape: withOccurrence(
+          barline(current, current.type === 'Barline' ? 'single' : 'double'),
+          visitor,
+        ),
         diagnostics: offCycle
           ? [
               {
@@ -1892,7 +1924,7 @@ export function evaluateScoreSemantics(
         }
         return false
       }
-      const sequenceItems = function* (): Generator<Expression> {
+      const sequenceItems = function* (): Generator<ScoreExpression> {
         for (const item of current.type === 'Sequence' ? current.items : [current]) {
           if (item.type === 'RepeatChain') yield* resolveRepeatChain(item.repeats)
           else yield item
@@ -1900,13 +1932,14 @@ export function evaluateScoreSemantics(
       }
       // Expand a reached repeat in place so one-shot directives can see its
       // items and a jump can still leave later repeats unexpanded.
-      const items = function* (): Generator<Expression> {
+      const items = function* (): Generator<ScoreExpression> {
         for (const item of sequenceItems()) {
           if (interrupted()) return
           if (playback && item.type === 'Repeat') {
             const expanded = expandBlockRepeats(
               { type: 'Sequence', items: [item], location: item.location },
               false,
+              item.expansionPath ?? visitor.scope.expansionPath,
             )
             if (expanded.diagnostics.length) {
               results.push(
@@ -1916,7 +1949,7 @@ export function evaluateScoreSemantics(
               )
             }
             if (!expanded.program) return
-            for (const child of expanded.program.body as unknown as Expression[]) {
+            for (const child of expanded.program.body) {
               if (interrupted()) return
               yield child
             }
@@ -1927,6 +1960,7 @@ export function evaluateScoreSemantics(
         activeVisitor = at(
           activeVisitor,
           visitor.scope.offset.add(elapsed.mul(visitor.scope.timeScale)),
+          item.expansionPath ?? visitor.scope.expansionPath,
         )
         if (item.type === 'VariableDeclaration' || item.type === 'FunctionDeclaration') {
           const declared = evaluateDeclaration(
@@ -2195,7 +2229,7 @@ export function evaluateScoreSemantics(
               directive?.kind === 'time' ||
               directive?.kind === 'tempo'
                 ? withVisitorContext(shape, activeVisitor)
-                : shape,
+                : withOccurrence(shape, activeVisitor),
             diagnostics: resolved.diagnostics,
           })
           continue
@@ -2644,10 +2678,13 @@ export function evaluateScoreSemantics(
     if (current.type === 'PitchContextChange') {
       try {
         const changed = applyPitchContextChange(current, context, environment)
-        return { shape: contextShape(current, changed, context), diagnostics: [] }
+        return {
+          shape: withOccurrence(contextShape(current, changed, context), visitor),
+          diagnostics: [],
+        }
       } catch (error) {
         if (error instanceof EvaluationError) return { diagnostics: error.diagnostics }
-        return { shape: contextAnnotation(current), diagnostics: [] }
+        return { shape: withOccurrence(contextAnnotation(current), visitor), diagnostics: [] }
       }
     }
     const value = evaluateExpression(current, context, environment)
@@ -2721,10 +2758,7 @@ export function evaluateScoreSemantics(
     }
     const evaluated = playablePitch(current, context, value)
     if (!('pitch' in evaluated)) return evaluated
-    const broadcastContext = current as Expression & {
-      readonly broadcastArticulation?: Fraction
-    }
-    const broadcastArticulation = broadcastContext.broadcastArticulation
+    const { broadcastArticulation } = current
     const articulation =
       broadcastArticulation && broadcastArticulation.compare(currentArticulation) > 0
         ? broadcastArticulation
@@ -2750,7 +2784,7 @@ export function evaluateScoreSemantics(
         : {}),
     }
     if ('raw' in current) authoredLabels.set(shape, String(current.raw))
-    return { shape, diagnostics: evaluated.diagnostics }
+    return { shape: withOccurrence(shape, visitor), diagnostics: evaluated.diagnostics }
   }
 
   const base: ScoreVisitorContext = {
@@ -2769,10 +2803,13 @@ export function evaluateScoreSemantics(
     lexicalEnvironment: options.lexicalEnvironment,
   }
   const identity: ContextResolver = { cache: new WeakMap() }
-  const visitor = new Visitor<Expression, VisitorScope, ScoreShapeEvaluationResult>(
+  const visitor = new Visitor<ScoreExpression, VisitorScope, ScoreShapeEvaluationResult>(
     (current, active) => {
       try {
-        const result = evaluateNode(current, at(active, active.scope.offset))
+        const result = evaluateNode(
+          current,
+          at(active, active.scope.offset, current.expansionPath ?? active.scope.expansionPath),
+        )
         if (
           active.scope.stopOnError &&
           result.diagnostics.some(({ severity }) => severity === 'error')
@@ -2797,6 +2834,7 @@ export function evaluateScoreSemantics(
     },
     {
       ...contextScope(base),
+      expansionPath: [],
       base,
       resolve: identity,
       subdivisionContext: identity,

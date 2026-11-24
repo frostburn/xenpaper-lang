@@ -29,14 +29,24 @@ if ('score' in result) {
 }
 ```
 
-`parse()` calls the generated Peggy parser, collects source comments, and throws
-a Peggy syntax error for invalid source. Runtime stages return diagnostics for
-semantic errors. See the [public exports](src/index.ts).
+`parse()` collects source comments and throws a Peggy syntax error for invalid
+source. Editors can use `tryParse(source, { grammarSource: file })`. On success,
+the result contains `program` and an empty `diagnostics` array. A syntax error
+returns a diagnostic with code `XP_SYNTAX`, severity `error`, and a source
+range. Runtime stages use the same diagnostic format.
 Staff notation and audio scheduling are separate projections of the parsed
 source. `evaluateScoreShape()` produces an abstract, exact-duration notation
 tree; dynamics remain zero-duration annotations and velocity never changes a
 notation attack. `constructStaffNotationShape()` converts that tree to
 renderer-independent staff data.
+
+Staff nodes carry `origins` linking them to the source text. Each origin has
+a role and a range with the source identity and start and end offsets.
+Generated spacing may have an empty origin list. Meter and tempo keep their
+display `text` on staff annotations. Narrow on `marker === 'time-signature'`
+to read `numerator` and `denominator`, or `marker === 'tempo'` to read the
+exact `bpm` fraction. Playback markers use the same fields alongside their
+`label`. Barline markers expose `style` and dynamic markers expose `mark`.
 
 `evaluateProgramSemantics()` expands repeats and evaluates the score once,
 returning its exact-duration tree and prevailing context. `expandToBeatEvents()`
@@ -45,11 +55,22 @@ articulation and groove, still on a rational grid. Neither API schedules audio
 or converts beats to seconds. `expandRepeats()` is also available for tooling
 that needs source occurrences and their expansion paths.
 
+Playback events inside repeats carry an `expansionPath` from the outermost
+repeat to the innermost. Each step has a `repeatOffset`, a zero-based
+`iteration`, and the repeat's `source` when supplied. For `C :|` both notes
+refer to the written C, and their paths identify iterations 0 and 1. The path
+describes the onset of a tied note. Code that walks a successful
+`expandRepeats(program)` result can narrow each expanded node by its `type`.
+Deferred code such as a function body retains its written syntax until execution
+reaches it.
+
 For AST consumers, `FunctionBody.statements` contains every statement in source
 order, including a trailing `ReturnStatement`. Consecutive implicit repeats
 share a `RepeatChain` whose `repeats` array contains each written `Repeat`
 once. Runtime consumers can also read older trees with `returnStatement` or
-`replayPrefix` fields.
+`replayPrefix` fields. A repeat's `startMarkerLocation` points to the written
+`|:` or is `null` for an implicit start. The opening barline generated for an
+implicit start has a zero-width span.
 
 ## Development
 

@@ -4,6 +4,7 @@ import type {
   FunctionBody,
   FunctionDeclaration,
   FunctionParameter,
+  Node,
   PitchLiteral,
   PostfixExpression,
   Program,
@@ -36,17 +37,38 @@ export interface DirectiveExtension {
 }
 
 export interface ExpansionStep {
+  /** Source identity supplied to parse(), when available. */
+  readonly source?: unknown
   readonly repeatOffset: number
   readonly iteration: number
 }
 
 export type ExpansionPath = readonly ExpansionStep[]
 
-/** Parser node decorated with the repeat occurrence that produced it. */
-export type ExpandedNode = Record<string, unknown> & {
-  readonly type: string
+/** These nodes retain their written operands until the runtime executes them. */
+export const deferredRepeatNodes = [
+  'IfBlock',
+  'TryBlock',
+  'ForBlock',
+  'WhileBlock',
+  'VariableDeclaration',
+  'BindingAssignment',
+  'FunctionDeclaration',
+  'CallExpression',
+] as const satisfies readonly Expression['type'][]
+
+type ExpandedChild<T> = T extends Node
+  ? ExpandedNode<T>
+  : T extends (infer Item)[]
+    ? ExpandedChild<Item>[]
+    : T
+
+/** A visited syntax node carries the repeat occurrence that produced it. */
+export type ExpandedNode<T extends Node = Expression> = {
   readonly expansionPath: ExpansionPath
-}
+} & (T extends { type: (typeof deferredRepeatNodes)[number] | 'Repeat' | 'RepeatChain' }
+  ? T
+  : { [Key in keyof T]: ExpandedChild<T[Key]> })
 
 export interface ExpandedProgram extends Omit<Program, 'body'> {
   readonly body: readonly ExpandedNode[]
@@ -441,11 +463,20 @@ export type StaffClef =
   | { readonly kind: 'bass' }
   | { readonly kind: 'diamond-mos'; readonly pattern: string }
 
-export type StaffNotationShape =
+type TimingMarker =
+  | { readonly marker: 'time-signature'; readonly numerator: number; readonly denominator: number }
+  | { readonly marker: 'tempo'; readonly bpm: Fraction }
+
+export type StaffNotationShape = StaffNotationItem & {
+  readonly duration: Fraction
+  /** Written sources contributing to this engraving. Generated spacing can have no origins. */
+  readonly origins?: readonly SourceOrigin[]
+}
+
+type StaffNotationItem =
   | {
       readonly kind: 'note'
       readonly pitch: StaffPitch
-      readonly duration: Fraction
       readonly displayLabel?: string
       readonly justIntonation?: boolean
       readonly grace?: boolean
@@ -459,44 +490,41 @@ export type StaffNotationShape =
         readonly to: StaffPitch
       }[]
     }
-  | { readonly kind: 'rest'; readonly duration: Fraction; readonly generated: boolean }
+  | { readonly kind: 'rest'; readonly generated: boolean }
   | {
       readonly kind: 'continue'
-      readonly duration: Fraction
       /** False for a glissando target whose time must not lengthen the source notehead. */
       readonly extendsAutomation?: boolean
     }
   | {
       readonly kind: 'barline'
       readonly style: BarlineStyle
-      readonly duration: Fraction
       readonly endingNumber?: number
     }
-  | { readonly kind: 'annotation'; readonly text: string; readonly duration: Fraction }
+  | ({ readonly kind: 'annotation'; readonly text: string } & (
+      | TimingMarker
+      | { readonly marker?: undefined }
+    ))
   | {
       readonly kind: 'swing'
       readonly straightDurations: readonly Fraction[]
       readonly grooveDurations: readonly Fraction[]
       readonly tuplet?: number
-      readonly duration: Fraction
     }
-  | { readonly kind: 'dynamic'; readonly mark: DynamicMark; readonly duration: Fraction }
-  | { readonly kind: 'clef'; readonly clef: StaffClef; readonly duration: Fraction }
+  | { readonly kind: 'dynamic'; readonly mark: DynamicMark }
+  | { readonly kind: 'clef'; readonly clef: StaffClef }
   | {
       readonly kind: 'key-signature'
       readonly pitches: readonly StaffPitch[]
-      readonly duration: Fraction
     }
   | {
       readonly kind: 'sequence'
-      readonly duration: Fraction
       readonly children: readonly StaffNotationShape[]
       readonly normalized?: boolean
       readonly tuplet?: number
     }
   | {
       readonly kind: 'parallel'
-      readonly duration: Fraction
       readonly branches: readonly StaffNotationShape[]
     }
 
@@ -513,6 +541,8 @@ export interface SourceOrigin {
 }
 
 export interface ShapeBase {
+  /** Enclosing playback repeats in order from outermost to innermost. */
+  readonly expansionPath?: ExpansionPath
   readonly directiveRampStart?: DirectiveRampMarker
   readonly directiveRampEnd?: DirectiveRampMarker
   readonly duration: Fraction
@@ -688,10 +718,16 @@ export type ScoreShape =
   | SequenceShape
   | ParallelShape
 
-/** A renderer/audio-engine friendly score whose time axis is still exact beats. */
-export interface BeatTimedNoteEvent {
-  readonly kind: 'note'
+interface BeatTimedEventBase {
   readonly start: Fraction
+  readonly origins: readonly SourceOrigin[]
+  /** Repeat iterations active at this event's onset. Omitted outside repeats. */
+  readonly expansionPath?: ExpansionPath
+}
+
+/** A sounding note with exact beat timing. */
+export interface BeatTimedNoteEvent extends BeatTimedEventBase {
+  readonly kind: 'note'
   readonly duration: Fraction
   readonly pitch: AttackShape['pitch']
   readonly rootPitch?: AbsolutePitchValue
@@ -702,16 +738,17 @@ export interface BeatTimedNoteEvent {
   readonly automation?: PitchAutomation
   /** Faithful authored pitch expression, when one exists. */
   readonly label?: string
-  readonly origins: readonly SourceOrigin[]
 }
 
-export interface BeatTimedMarkerEvent {
+export type BeatTimedMarkerEvent = BeatTimedEventBase & {
   readonly kind: 'marker'
-  readonly start: Fraction
-  readonly marker: 'barline' | 'annotation' | 'dynamic' | 'time-signature' | 'tempo'
   readonly label: string
-  readonly origins: readonly SourceOrigin[]
-}
+} & (
+    | TimingMarker
+    | { readonly marker: 'barline'; readonly style: BarlineStyle; readonly endingNumber?: number }
+    | { readonly marker: 'dynamic'; readonly mark: DynamicMark }
+    | { readonly marker: 'annotation' }
+  )
 
 export type BeatTimedEvent = BeatTimedNoteEvent | BeatTimedMarkerEvent
 

@@ -6,6 +6,7 @@ import { DYNAMIC_VELOCITIES } from './directives.js'
 import { Visitor, type VisitorEvaluation } from './visitor.js'
 import type {
   BeatTimedEvent,
+  BeatTimedMarkerEvent,
   BeatTimedNoteEvent,
   BeatTimedScore,
   ScoreShape,
@@ -25,6 +26,42 @@ interface BeatEventFlatteningResult {
 }
 
 const copy = (value: Fraction) => new Fraction(value.n, value.d)
+
+function timedMarker(
+  shape: Extract<ScoreShape, { kind: BeatTimedMarkerEvent['marker'] }>,
+  start: Fraction,
+): BeatTimedMarkerEvent {
+  const base = {
+    kind: 'marker' as const,
+    start: copy(start),
+    origins: shape.origins,
+    ...(shape.expansionPath && { expansionPath: shape.expansionPath }),
+  }
+  switch (shape.kind) {
+    case 'barline':
+      return {
+        ...base,
+        marker: shape.kind,
+        style: shape.style,
+        label: shape.style,
+        ...(shape.endingNumber !== undefined && { endingNumber: shape.endingNumber }),
+      }
+    case 'annotation':
+      return { ...base, marker: shape.kind, label: shape.text }
+    case 'dynamic':
+      return { ...base, marker: shape.kind, mark: shape.mark, label: shape.mark }
+    case 'time-signature':
+      return {
+        ...base,
+        marker: shape.kind,
+        numerator: shape.numerator,
+        denominator: shape.denominator,
+        label: `${shape.numerator}/${shape.denominator}`,
+      }
+    case 'tempo':
+      return { ...base, marker: shape.kind, bpm: shape.bpm, label: shape.bpm.toFraction() }
+  }
+}
 
 type Groove = {
   origin: Fraction
@@ -136,6 +173,7 @@ export function flattenScoreSemantics(
         automation: current.automation,
         label: current.authoredLabel ?? current.displayLabel,
         origins: current.origins,
+        ...(current.expansionPath && { expansionPath: current.expansionPath }),
         groove: state.groove,
         useTimelineGroove: !state.grooveOverride,
         articulation: current.articulation ?? new Fraction(1),
@@ -238,22 +276,7 @@ export function flattenScoreSemantics(
       current.kind === 'time-signature' ||
       current.kind === 'tempo'
     ) {
-      events.push({
-        kind: 'marker',
-        start: copy(start),
-        marker: current.kind,
-        label:
-          current.kind === 'barline'
-            ? current.style
-            : current.kind === 'dynamic'
-              ? current.mark
-              : current.kind === 'time-signature'
-                ? `${current.numerator}/${current.denominator}`
-                : current.kind === 'tempo'
-                  ? current.bpm.toFraction()
-                  : current.text,
-        origins: current.origins,
-      })
+      events.push(timedMarker(current, start))
     } else if (current.kind === 'clef' || current.kind === 'key-signature') {
       // Clefs and signatures are engraving-only context and deliberately do not enter playback.
     } else if (current.kind === 'sequence') {
