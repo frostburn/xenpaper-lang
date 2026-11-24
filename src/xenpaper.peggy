@@ -31,36 +31,6 @@
   const sequence = (items, loc = location()) =>
     items.length === 1 ? items[0] : node('Sequence', { items }, loc);
 
-  const statementTypes = new Set([
-    'VariableDeclaration', 'FunctionDeclaration', 'BindingAssignment',
-    'IfBlock', 'ForBlock', 'WhileBlock', 'LoopJump', 'ThrowStatement',
-  ]);
-
-  // Scoped score parsing owns repeats and parallel branches. Expose statements
-  // directly in the surrounding body without taking apart those expressions.
-  const appendStatements = (body, expression) => {
-    if (!expression) return;
-    if (expression.type !== 'Sequence' || !expression.items.some(item => statementTypes.has(item.type))) {
-      body.push(expression);
-      return;
-    }
-    let items = [];
-    const flush = () => {
-      if (!items.length) return;
-      body.push(sequence(items, { ...items[0].location, end: items.at(-1).location.end }));
-      items = [];
-    };
-    for (const item of expression.items) {
-      if (statementTypes.has(item.type)) {
-        flush();
-        body.push(item);
-      } else {
-        items.push(item);
-      }
-    }
-    flush();
-  };
-
   const implicitRepeats = new WeakSet();
   const noImplicitParallelRepeat = new Set();
 
@@ -122,10 +92,10 @@ DocumentBody
       return { boundary, next };
     })* {
       const body = [];
-      appendStatements(body, first);
+      if (first) body.push(first);
       for (const part of rest) {
         if (part.boundary) body.push(part.boundary);
-        appendStatements(body, part.next);
+        if (part.next) body.push(part.next);
       }
       return body;
     }
@@ -543,10 +513,7 @@ RepeatEndings
 EndingBody
   = first:EndingParallelExpression?
     rest:(Spacing StatementDelimiter Spacing next:EndingParallelExpression? { return next; })* {
-      const body = [];
-      appendStatements(body, first);
-      for (const item of rest) appendStatements(body, item);
-      return body;
+      return [first, ...rest].filter(Boolean);
     }
 
 EndingParallelExpression
@@ -593,10 +560,10 @@ RepeatBody
       return { boundary, next };
     })* {
       const body = [];
-      appendStatements(body, first);
+      if (first) body.push(first);
       for (const part of rest) {
         if (part.boundary) body.push(part.boundary);
-        appendStatements(body, part.next);
+        if (part.next) body.push(part.next);
       }
       return body;
     }

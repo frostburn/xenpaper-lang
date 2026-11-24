@@ -2,25 +2,34 @@ import { describe, expect, it } from 'vitest'
 import { parse } from '../parser.js'
 
 describe('lexical declarations', () => {
-  it.each(['let foo <- 1 $ let bar <- 2 3 $ foo bar', 'let foo <- 1\nlet bar <- 2 3\n\nfoo bar'])(
-    'keeps declarations outside the score sequence in %s',
-    (source) => {
-      expect(parse(source).body).toMatchObject([
-        { type: 'VariableDeclaration', name: { name: 'foo' }, value: { degree: '1' } },
-        {
-          type: 'VariableDeclaration',
-          name: { name: 'bar' },
-          value: { type: 'Sequence', items: [{ degree: '2' }, { degree: '3' }] },
-        },
-        { type: 'Sequence', items: [{ name: 'foo' }, { name: 'bar' }] },
-      ])
-    },
-  )
+  it('preserves the score sequence and its binding boundaries', () => {
+    const declarations = [
+      { type: 'VariableDeclaration', name: { name: 'foo' }, value: { degree: '1' } },
+      {
+        type: 'VariableDeclaration',
+        name: { name: 'bar' },
+        value: { type: 'Sequence', items: [{ degree: '2' }, { degree: '3' }] },
+      },
+    ]
+    const references = [{ name: 'foo' }, { name: 'bar' }]
+    expect(parse('let foo <- 1\nlet bar <- 2 3\n\nfoo bar').body).toMatchObject([
+      { type: 'Sequence', items: [...declarations, ...references] },
+    ])
+    expect(parse('let foo <- 1 $ let bar <- 2 3 $ foo bar').body).toMatchObject([
+      ...declarations,
+      { type: 'Sequence', items: references },
+    ])
+  })
 
   it('continues an unfinished operator expression across a newline', () => {
     expect(parse('let half <- 1/1 /\n  2/1\nhalf').body).toMatchObject([
-      { type: 'VariableDeclaration', value: { type: 'BinaryExpression', operator: '/' } },
-      { type: 'Identifier', name: 'half' },
+      {
+        type: 'Sequence',
+        items: [
+          { type: 'VariableDeclaration', value: { type: 'BinaryExpression', operator: '/' } },
+          { type: 'Identifier', name: 'half' },
+        ],
+      },
     ])
   })
 
@@ -28,7 +37,7 @@ describe('lexical declarations', () => {
     'separates binding arrows from note continuations in %s',
     (source) => {
       const program = parse(source)
-      expect(program.body).toMatchObject([
+      const items = [
         {
           type: 'VariableDeclaration',
           name: { name: 'motif' },
@@ -39,7 +48,10 @@ describe('lexical declarations', () => {
           expression: { type: 'Identifier', name: 'motif' },
           marks: [{ type: 'DetachedContinue' }, { type: 'DetachedContinue' }],
         },
-      ])
+      ]
+      expect(program.body).toMatchObject(
+        source.includes('$') ? items : [{ type: 'Sequence', items }],
+      )
     },
   )
 

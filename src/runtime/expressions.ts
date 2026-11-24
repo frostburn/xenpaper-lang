@@ -85,7 +85,10 @@ let cachedPreludeEnvironment: LexicalEnvironment | undefined
 export function preludeEnvironment(): LexicalEnvironment {
   if (cachedPreludeEnvironment) return cachedPreludeEnvironment
   let environment = EMPTY_LEXICAL_ENVIRONMENT
-  for (const declaration of parse(PRELUDE).body) {
+  const declarations = parse(PRELUDE).body.flatMap((node) =>
+    node.type === 'Sequence' ? node.items : [node],
+  )
+  for (const declaration of declarations) {
     if (declaration.type !== 'VariableDeclaration' && declaration.type !== 'FunctionDeclaration') {
       throw new TypeError('The Xenpaper prelude may only contain declarations.')
     }
