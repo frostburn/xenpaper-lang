@@ -62,6 +62,20 @@ export function evaluateBuiltinArgument(
     if (!('value' in evaluated) || evaluated.value.kind !== 'container') return evaluated
     return { ...evaluated, value: { ...evaluated.value, grouped: true } }
   }
+  if (node.type === 'PostfixExpression') {
+    const evaluated = evaluateBuiltinArgument(node.expression, coercion, environment, evaluate)
+    if (!('value' in evaluated)) return evaluated
+    return {
+      value: {
+        kind: 'container',
+        values: [evaluated.value],
+        postfixMarks: node.marks,
+        value: new Value(0),
+        origins: [{ location: node.location, role: 'literal' }],
+      },
+      diagnostics: evaluated.diagnostics,
+    }
+  }
   if (node.type === 'NormalizeToSlot') {
     if (!node.expression)
       return {

@@ -5,6 +5,7 @@ import type {
   FunctionDeclaration,
   FunctionParameter,
   PitchLiteral,
+  PostfixExpression,
   Program,
 } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
@@ -248,6 +249,8 @@ export interface ContainerValue {
   readonly composition?: 'sequence' | 'parallel'
   readonly normalized?: boolean
   readonly grouped?: boolean
+  /** Apply these marks when playing the captured value in the current timing context. */
+  readonly postfixMarks?: readonly PostfixExpression['marks'][number][]
   readonly values: readonly EvaluatedLiteral[]
   readonly value: Value
   readonly origins: readonly SourceOrigin[]

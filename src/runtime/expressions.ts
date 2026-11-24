@@ -915,7 +915,8 @@ export function evaluateExpression(
       node.type === 'Group' ||
       node.type === 'NormalizeToSlot' ||
       node.type === 'Sequence' ||
-      node.type === 'Parallel'
+      node.type === 'Parallel' ||
+      node.type === 'PostfixExpression'
     )
       return containerItems(node, mapping, environment)
     if (node.type === 'PitchModifierExpression') {
