@@ -214,6 +214,8 @@ export interface PitchOffsetValue {
   readonly spelling?: IntervalSpelling
   /** Authored numeric scale degree, retained so engraving does not infer an interordinal. */
   readonly scaleDegree?: number
+  /** Modifiers on a degree that can be resolved again in a new tuning. */
+  readonly degreeModifiers?: readonly string[]
   readonly origins: readonly SourceOrigin[]
 }
 
@@ -256,12 +258,11 @@ export interface ContainerValue {
   readonly origins: readonly SourceOrigin[]
 }
 
-/** Score syntax with the lexical bindings and pitch context of its capture site. */
+/** Score syntax with the lexical bindings of its capture site. */
 export interface ScoreFragmentValue {
   readonly kind: 'scoreFragment'
   readonly expression: Expression
   readonly environment: LexicalEnvironment
-  readonly pitchContext: PitchContext
   readonly value: Value
   readonly origins: readonly SourceOrigin[]
 }

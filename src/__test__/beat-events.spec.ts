@@ -48,12 +48,12 @@ describe('beat event expansion', () => {
     expect(audibleResult(source)).toEqual(audibleResult(expected))
   })
 
-  it('plays captured tuning at the current pulse', () => {
+  it('plays a stored fragment at the current tuning and pulse', () => {
     const result = score('let phrase <- 1d . 2d $ {24edo} @2 phrase 1d')
     const notes = result.events.filter((event) => event.kind === 'note')
     expect(notes.map((note) => [note.start.toFraction(), note.pitch.value.valueOf()])).toEqual([
-      ['0', 100],
-      ['1', 200],
+      ['0', 50],
+      ['1', 100],
       ['3/2', 50],
     ])
     expect(result.duration.toFraction()).toBe('2')
@@ -323,10 +323,21 @@ describe('beat event expansion', () => {
     expect(result.events).toEqual([])
   })
 
-  it('keeps the declared pitch of a continued degree when tuning changes', () => {
+  it('retunes a stored continued degree at playback', () => {
     const result = score('let foo <- 1d== $ {24edo} foo')
     const notes = result.events.filter((event) => event.kind === 'note')
-    expect(notes.map((note) => note.pitch.value.valueOf())).toEqual([100])
+    expect(notes.map((note) => note.pitch.value.valueOf())).toEqual([50])
+  })
+
+  it('preserves degree modifiers and the values of arithmetic results', () => {
+    const stored =
+      "let tone <- '2d $ let alias <- tone $ let scaled <- tone * 2/1 $ {24edo} alias scaled"
+    const result = score(stored)
+    expect(
+      result.events.flatMap((event) =>
+        event.kind === 'note' ? [event.pitch.value.valueOf()] : [],
+      ),
+    ).toEqual([1300, 2800])
   })
 
   it('does not continue a note across a rest at the end of a group', () => {
