@@ -299,6 +299,9 @@ describe('arithmetic expression evaluation', () => {
     const singleton = evaluate('sorted([2/1])')
     if (singleton.kind !== 'container') throw new Error('Expected a container.')
     expect(singleton.values.map((item) => item.value.valueOf())).toEqual([2])
+    const large = evaluate('sorted((2 ** 1025, 2 ** 1024))')
+    if (large.kind !== 'container') throw new Error('Expected a container.')
+    expect(large.values[0]?.value.equals(new Value(2).pow(1024))).toBe(true)
     expect(evaluate('[1/1][0]').value.equals(1)).toBe(true)
     const degree = evaluate('[1][0]')
     expect(degree.kind).toBe('pitchOffset')
@@ -654,6 +657,9 @@ fn countOdds(limit: integer) {
       diagnostics: [{ code: 'XP_TYPE_MISMATCH' }],
     })
     expect(evaluateExpression(expression('1 mod 0'))).toMatchObject({
+      diagnostics: [{ code: 'XP_DIVISION_BY_ZERO' }],
+    })
+    expect(evaluateExpression(expression('1.0r / 0.0r'))).toMatchObject({
       diagnostics: [{ code: 'XP_DIVISION_BY_ZERO' }],
     })
   })

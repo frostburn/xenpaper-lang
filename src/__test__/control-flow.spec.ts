@@ -54,6 +54,81 @@ describe('comparison expressions', () => {
       /Boolean result cannot be played/,
     )
   })
+
+  it.each([
+    'true',
+    'false',
+    'let choice <- true $ choice',
+    'fn choose(value: boolean) { ret value } $ choose(1)',
+  ])('keeps %s Boolean through playback', (source) => {
+    expect(expandToBeatEvents(parse(source)).diagnostics).toMatchObject([
+      { code: 'XP_TYPE_MISMATCH', message: 'A Boolean result cannot be played as a note.' },
+    ])
+  })
+
+  it('coerces zero and one to Boolean and rejects negative one', () => {
+    const declaration = 'fn choose(value: boolean) { ret C if value else D } $ '
+    expect(score(declaration + 'choose(0) choose(1)')).toEqual(score('D C'))
+    expect(expandToBeatEvents(parse(declaration + 'choose(-1)')).diagnostics).toMatchObject([
+      { code: 'XP_PARAMETER_COERCION' },
+    ])
+  })
+
+  it.each(['2 ** 1024 @lt 2 ** 1025', '2 ** -1200 @gt 0', '2 ** -1200'])(
+    'takes the true branch for %s',
+    (condition) => {
+      expect(score(`if(${condition}) { D } else { E }`)).toEqual(score('D'))
+    },
+  )
+})
+
+describe('higher-order calls', () => {
+  it.each([
+    ['arrayMap', '(item)', '[callback]'],
+    ['arrayReduce', '(item, following)', '[callback callback]'],
+  ])('keeps the recursion guard active inside %s', (builtin, parameters, arguments_) => {
+    const source = `fn runner(callback) { ret ${builtin}(callback, ${arguments_}) }
+let callback <- ${parameters} => runner(item)
+runner(callback)`
+    expect(expandToBeatEvents(parse(source)).diagnostics).toMatchObject([
+      { code: 'XP_RECURSION', message: 'Recursive call to runner() is prohibited.' },
+    ])
+  })
+
+  it.each([
+    ['arrayMap', '(item)', '[C]'],
+    ['arrayReduce', '(item, following)', '[C D]'],
+  ])(
+    'can invoke a closure after its creator has returned through %s',
+    (builtin, parameters, arguments_) => {
+      const source = `fn maker() { ret ${parameters} => maker() }
+let callback <- maker()
+let output <- ${builtin}(callback, ${arguments_})
+C`
+      expect(score(source)).toEqual(score('C'))
+    },
+  )
+
+  it.each([
+    ['arrayMap', '(item)', '[C]'],
+    ['arrayReduce', '(item, following)', '[C D]'],
+  ])(
+    'preserves a callback error and its source location through %s',
+    (builtin, parameters, arguments_) => {
+      const source = `fn fail(item) { throw("callback failed") $ ret item }
+${builtin}(${parameters} => fail(item), ${arguments_})`
+      expect(expandToBeatEvents(parse(source)).diagnostics).toMatchObject([
+        {
+          code: 'XP_THROW',
+          message: 'callback failed',
+          locations: [
+            { start: { offset: source.indexOf('fail(item)', source.indexOf('=>')) } },
+            { start: { offset: source.indexOf('throw') } },
+          ],
+        },
+      ])
+    },
+  )
 })
 
 describe('score control flow', () => {

@@ -148,27 +148,30 @@ class ExactMonomial {
   }
 
   addIfClosed(other: ExactMonomial): ExactMonomial | null {
-    const left = this.toFraction()
-    const right = other.toFraction()
-    if (left && right) return ExactMonomial.fromFraction(left.add(right))
     if (!this.sign) return other
     if (!other.sign) return this
     if (this.equals(other)) return this.mul(ExactMonomial.fromFraction(2))
+    if (this.sign !== other.sign && this.equals(other.neg())) return ExactMonomial.ZERO
+    const left = this.toFraction()
+    const right = other.toFraction()
+    if (left && right) return ExactMonomial.fromFraction(left.add(right))
     return null
   }
 
   toFraction(): Fraction | null {
     if (!this.sign) return new Fraction(0)
-    let result = new Fraction(this.sign)
+    let numerator: number = this.sign
+    let denominator = 1
     for (const [prime, component] of this.exponents) {
       if (prime <= 0) continue
       const exponent = new Fraction(component)
       if (exponent.d !== 1) return null
-      const factor = new Fraction(prime).pow(exponent)
-      if (!factor) return null
-      result = result.mul(factor)
+      const factor = prime ** exponent.n
+      if (exponent.s < 0) denominator *= factor
+      else numerator *= factor
+      if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator)) return null
     }
-    return result
+    return new Fraction(numerator, denominator)
   }
 
   equals(other: ExactMonomial): boolean {
@@ -460,6 +463,7 @@ export class Value {
 
   div(input: ValueInput): Value {
     const other = coerceValue(input)
+    if (other.isZero()) throw new RangeError('Division by zero.')
     const dimensions = this.dimensions.sub(other.dimensions)
     if (this.magnitude.kind === 'pitch' && other.dimensions.isDimensionless) {
       const scalar = other.exactRational()
@@ -662,12 +666,32 @@ export class Value {
       return difference < 0 ? -1 : difference > 0 ? 1 : 0
     }
     this.assertCompatible(other, 'compare')
+    if (this.magnitude.kind === 'exact' && other.magnitude.kind === 'exact') {
+      const left = this.magnitude.value
+      const right = other.magnitude.value
+      if (left.sign !== right.sign) return Math.sign(left.sign - right.sign)
+      if (!left.sign || left.equals(right)) return 0
+
+      const difference = left.valueOf() - right.valueOf()
+      if (difference) return Math.sign(difference)
+      // Compare the ratio in log space when the operands overflow, underflow,
+      // or round to the same magnitude as floating-point numbers.
+      const ratio = left.div(right)
+      const relative = ratio.toFraction()?.compare(1) ?? ExactPitch.fromRatio(ratio).valueOf()
+      return Math.sign(relative) * left.sign || 0
+    }
     const difference = this.valueOf() - other.valueOf()
     return difference < 0 ? -1 : difference > 0 ? 1 : 0
   }
 
   isExact(): boolean {
     return this.magnitude.kind !== 'real'
+  }
+
+  isZero(): boolean {
+    if (this.magnitude.kind === 'exact') return this.magnitude.value.sign === 0
+    if (this.magnitude.kind === 'pitch') return this.magnitude.value.logPrimes.size === 0
+    return this.magnitude.value === 0
   }
   /** Whether this value is an exact, positive, dimensionless ratio. */
   isPositiveExactRatio(): boolean {

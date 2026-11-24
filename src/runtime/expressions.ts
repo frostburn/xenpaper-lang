@@ -255,7 +255,7 @@ function coerceParameter(
     case 'boolean': {
       if (value.kind !== 'scalar' || !value.value.dimensions.isDimensionless) break
       const exact = value.value.exactRational()
-      if (exact?.d === 1 && (exact.n === 0 || exact.n === 1)) return value
+      if (exact?.equals(0) || exact?.equals(1)) return { ...value, boolean: true }
       break
     }
     default:
@@ -684,7 +684,7 @@ export function isTruthy(value: EvaluatedLiteral): boolean {
   if (value.kind === 'undefined') return false
   if (value.kind === 'absolutePitch') return true
   if (value.kind === 'container') return value.values.length > 0
-  return value.value.valueOf() !== 0
+  return !value.value.isZero()
 }
 
 function binary(
@@ -879,9 +879,12 @@ export function evaluateExpression(
       }
     if (node.type === 'Identifier' && (node.name === 'true' || node.name === 'false'))
       return {
-        value: result('scalar', new Value(node.name === 'true' ? 1 : 0), [
-          { location: node.location, role: 'literal' },
-        ]),
+        value: {
+          ...result('scalar', new Value(node.name === 'true' ? 1 : 0), [
+            { location: node.location, role: 'literal' },
+          ]),
+          boolean: true,
+        },
         diagnostics: [],
       }
     if (node.type === 'LambdaExpression') {
