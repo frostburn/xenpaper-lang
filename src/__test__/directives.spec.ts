@@ -82,6 +82,19 @@ describe('directive runtime', () => {
     expect(highlighted).toEqual(expect.arrayContaining(['|:', '|¹', ':|²', '||']))
   })
 
+  it('deduplicates repeated warnings with an opaque source identity', () => {
+    const file = { name: 'part.xp', inode: 1n }
+    const source = '@time(4/4) |: C | D :|'
+    const result = expandToBeatEvents(parse(source, { grammarSource: file }))
+    const warnings = result.diagnostics.filter(({ code }) => code === 'XP_BARLINE_OFF_CYCLE')
+    const atWrittenBar = warnings.filter(
+      ({ locations }) => locations[0]?.start.offset === source.indexOf('| D'),
+    )
+    expect(atWrittenBar).toHaveLength(1)
+    expect(atWrittenBar[0]?.locations[0]?.source).toBe(file)
+    expect(result).toHaveProperty('score')
+  })
+
   it('locates both off-cycle boundaries of an empty repeat', () => {
     const source = '@time(4/4) C |: :|'
     const result = compile(source)

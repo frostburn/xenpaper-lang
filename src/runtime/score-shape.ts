@@ -42,16 +42,23 @@ export function evaluateProgramSemantics(
 ): ScoreShapeEvaluationResult {
   const expanded = expandRepeats(program, { ...options, preserveBarlines: true })
   if (!expanded.program) return { diagnostics: expanded.diagnostics }
-  const sequence = {
+  const sequence: Expression = {
     type: 'Sequence',
-    items: expanded.program.body,
+    items: [...expanded.program.body],
     location: program.location,
-  } as unknown as Expression
+  }
   const result = evaluateScoreSemantics(sequence, options, true)
   const warned = new Set<string>()
+  const sourceIds = new Map<unknown, number>()
   const diagnostics = [...expanded.diagnostics, ...result.diagnostics].filter((diagnostic) => {
     if (diagnostic.code !== 'XP_BARLINE_OFF_CYCLE') return true
-    const key = JSON.stringify(diagnostic.locations)
+    // Peggy source identities can be objects such as editor documents or file handles.
+    const key = diagnostic.locations
+      .map(({ source, start, end }) => {
+        if (!sourceIds.has(source)) sourceIds.set(source, sourceIds.size)
+        return `${sourceIds.get(source)}:${start.offset}-${end.offset}`
+      })
+      .join(',')
     if (warned.has(key)) return false
     warned.add(key)
     return true

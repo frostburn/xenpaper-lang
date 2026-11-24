@@ -14,6 +14,35 @@ function notation(source: string) {
 }
 
 describe('staff notation construction', () => {
+  it('retains source spans, exact tempo, and meter alongside the display text', () => {
+    const source = '@tempo(1beat/700ms) @time(3/4) C D E ||'
+    const program = parse(source, { grammarSource: 'clip' })
+    const result = evaluateProgramShape(program, { allowTempoDirective: true })
+    if (!('shape' in result)) throw new Error('Expected a score shape.')
+    const staff = constructStaffNotationShape(result.shape)
+    if (staff.kind !== 'sequence') throw new Error('Expected a staff sequence.')
+    const [tempo, meter, note] = staff.children
+    const bar = staff.children.at(-1)
+    if (tempo?.kind !== 'annotation' || tempo.marker !== 'tempo') throw new Error('Expected tempo.')
+    expect(tempo.bpm.toFraction()).toBe('600/7')
+    expect(tempo.text).toBe('600/7 bpm')
+    expect(meter).toMatchObject({
+      kind: 'annotation',
+      marker: 'time-signature',
+      numerator: 3,
+      denominator: 4,
+      text: '3/4',
+    })
+    expect(note).toMatchObject({
+      origins: [{ location: { source: 'clip', start: { offset: source.indexOf('C') } } }],
+    })
+    expect(bar).toMatchObject({
+      kind: 'barline',
+      style: 'double',
+      origins: [{ location: { start: { offset: source.indexOf('||') } } }],
+    })
+  })
+
   it('emits key-signature events and suppresses repeated note accidentals', () => {
     const evaluated = evaluateScoreShape(parse('{key <- G} F F_').body[0] as Expression)
     if (!('shape' in evaluated)) throw new Error('Expected a score shape.')

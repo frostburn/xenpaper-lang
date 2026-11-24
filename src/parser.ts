@@ -1,5 +1,6 @@
-import { parse as parseSyntax } from './parser.generated.js'
+import { parse as parseSyntax, SyntaxError as PeggySyntaxError } from './parser.generated.js'
 import type { Comment, Node, Program, XenpaperParserOptions } from './parser.generated.js'
+import type { Diagnostic } from './diagnostics.js'
 
 export type * from './parser.generated.js'
 
@@ -14,7 +15,7 @@ const collectSyntaxHashes = (value: unknown, source: string, hashes: Set<number>
   const node = value as Partial<Node> & Record<string, unknown>
   let containsChildNode = false
   for (const [key, child] of Object.entries(node)) {
-    if (key === 'location') continue
+    if (key === 'location' || key.endsWith('Location')) continue
     containsChildNode = collectSyntaxHashes(child, source, hashes) || containsChildNode
   }
   if (!node.type || !node.location) return containsChildNode
@@ -73,4 +74,27 @@ export const parse = (input: string, options?: XenpaperParserOptions): Program =
   const program = parseSyntax(input, options)
   program.comments = collectComments(program)
   return program
+}
+
+export type ParseResult =
+  | { readonly program: Program; readonly diagnostics: readonly Diagnostic[] }
+  | { readonly diagnostics: readonly Diagnostic[] }
+
+/** Parse source with the same location and diagnostic convention as score evaluation. */
+export function tryParse(input: string, options?: XenpaperParserOptions): ParseResult {
+  try {
+    return { program: parse(input, options), diagnostics: [] }
+  } catch (error) {
+    if (!(error instanceof PeggySyntaxError)) throw error
+    return {
+      diagnostics: [
+        {
+          code: 'XP_SYNTAX',
+          severity: 'error',
+          message: error.message,
+          locations: [error.location],
+        },
+      ],
+    }
+  }
 }

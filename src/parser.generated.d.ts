@@ -522,6 +522,8 @@ export interface RatioLiteral extends Node {
 
 export interface Repeat extends Node {
   type: 'Repeat'
+  /** Written |: token, or null for an implicit start. Older trees omit this field. */
+  startMarkerLocation?: LocationRange | null
   count: IntegerLiteral | null
   body: Expression[]
   /** @deprecated Earlier parser output linked implicit repeats with a replay prefix. */
@@ -603,4 +605,5 @@ export interface XenpaperParserOptions extends ParserOptions {
 }
 
 export declare const StartRules: ['Start']
+export declare const SyntaxError: import('peggy').Parser['SyntaxError']
 export declare function parse(input: string, options?: XenpaperParserOptions): Program

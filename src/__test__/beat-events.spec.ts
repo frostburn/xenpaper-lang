@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { Fraction } from 'xen-dev-utils/fraction'
 import { parse } from '../parser.js'
 import { expandToBeatEvents } from '../runtime/beat-events.js'
+import { evaluateInitialization } from '../runtime/initialization.js'
+import { expandRepeats } from '../runtime/repeat-expansion.js'
 
 const score = (source: string) => {
   const result = expandToBeatEvents(parse(source))
@@ -28,6 +30,46 @@ const audibleResult = (source: string) => {
 }
 
 describe('beat event expansion', () => {
+  it('carries the same paths through transposition as through repeat expansion', () => {
+    const program = parse('(C :| D :|) + M2 $ E')
+    const paths = expandRepeats(parse(' C :| D :| E')).program!.body.map(
+      (node) => node.expansionPath,
+    )
+    const result = expandToBeatEvents(program)
+    if (!('score' in result)) throw new Error('Expected a beat-timed score.')
+    expect(
+      result.score.events
+        .filter((event) => event.kind === 'note')
+        .map((event) => event.expansionPath ?? []),
+    ).toEqual(paths)
+  })
+
+  it('keeps caller and callee repeat paths when playing a deferred block', () => {
+    const definition = 'fn play() { ret (if(true) { @p F :| }) }'
+    const { initialization } = evaluateInitialization(
+      parse(definition, { grammarSource: 'library' }),
+    )
+    const program = parse('|: play() :| G', { grammarSource: 'clip' })
+    const result = expandToBeatEvents(program, { initialization })
+    expect(result.diagnostics).toEqual([])
+    if (!('score' in result)) throw new Error('Expected a beat-timed score.')
+    const paths = [0, 1].flatMap((outer) =>
+      [0, 1].map((inner) => [
+        { source: 'clip', repeatOffset: 0, iteration: outer },
+        { source: 'library', repeatOffset: definition.indexOf('@p'), iteration: inner },
+      ]),
+    )
+    const events = result.score.events
+    expect(
+      events.filter((event) => event.kind === 'note').map((event) => event.expansionPath),
+    ).toEqual([...paths, undefined])
+    expect(
+      events
+        .filter((event) => event.kind === 'marker' && event.marker === 'dynamic')
+        .map((event) => event.expansionPath),
+    ).toEqual(paths)
+  })
+
   it.each([
     ['let phrase <- C . D $ phrase phrase', 'C . D C . D'],
     ['let phrase <- C -> C $ phrase', 'C -> C'],
