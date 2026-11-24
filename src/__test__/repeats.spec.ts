@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from '../parser.js'
 import { expandRepeats } from '../runtime/repeat-expansion.js'
+import { evaluateProgramShape } from '../runtime/score-shape.js'
 import type { ExpandedNode } from '../runtime/types.js'
 
 function body(source: string, expansionLimit?: number): readonly ExpandedNode[] {
@@ -102,8 +103,8 @@ describe('repeat expansion', () => {
     const program = parse('0 1, 2 3 :| | 4 5, 6 7 :|')
 
     expect(program.body[0]).toMatchObject({
-      type: 'Sequence',
-      items: [
+      type: 'RepeatChain',
+      repeats: [
         { type: 'Repeat', body: [{ type: 'Parallel' }] },
         { type: 'Repeat', body: [{ type: 'Parallel' }] },
       ],
@@ -120,6 +121,25 @@ describe('repeat expansion', () => {
         { type: 'Sequence' },
       ],
     })
+  })
+
+  it('keeps written repeat spans and derives nested occurrence paths during expansion', () => {
+    const source = 'C :| D :| E'
+    const program = parse(source)
+    const sequence = program.body[0]
+    const chain = sequence?.type === 'Sequence' && sequence.items[0]
+    if (!chain || chain.type !== 'RepeatChain') throw new Error('Expected a repeat chain.')
+    expect(
+      chain.repeats.map(({ location }) => source.slice(location.start.offset, location.end.offset)),
+    ).toEqual(['C :|', 'D :|'])
+
+    const expanded = expandRepeats(program).program!.body
+    expect(expanded.map((item) => item.raw)).toEqual(['C', 'C', 'D', 'C', 'C', 'D', 'E'])
+    expect(expanded[3]!.expansionPath).toEqual([
+      { repeatOffset: 5, iteration: 1 },
+      { repeatOffset: 0, iteration: 0 },
+    ])
+    for (const repeat of chain.repeats) expect(repeat).not.toHaveProperty('replayPrefix')
   })
 
   it.each(['groove', 'drone'])('keeps implicit repeats inside @%s arguments', (name) => {
@@ -199,6 +219,18 @@ describe('repeat expansion', () => {
   it('does not iterate enormous repeats whose expansion is empty', () => {
     expect(body('|:@x999999999999999999999999 :|')).toEqual([])
     expect(body('|:@x999999999999999999999999 |:@x0 C :| :|')).toEqual([])
+  })
+
+  it('replays earlier sections even when the final written section is silent', () => {
+    expect(body('C :| |:@x0 D :| :|').map((item) => item.raw)).toEqual(['C', 'C', 'C', 'C'])
+  })
+
+  it('bounds notation replay for chained repeat ends', () => {
+    const result = evaluateProgramShape(parse('C :| '.repeat(10)), { expansionLimit: 16 })
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'XP_EXPANSION_LIMIT' }),
+    )
+    expect(result).not.toHaveProperty('shape')
   })
 
   it('returns a diagnostic and no partial program at the expansion limit', () => {

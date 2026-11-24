@@ -1,5 +1,5 @@
 import { Fraction } from 'xen-dev-utils/fraction'
-import type { Expression, Node } from '../parser.generated.js'
+import type { Expression, Node, Repeat } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
 import { catchableDiagnostic, EvaluationError } from '../diagnostics.js'
 import { Value } from '../value.js'
@@ -13,7 +13,7 @@ import {
   evaluateFunctionCall,
   stringValue,
 } from './expressions.js'
-import { expandRepeats } from './repeat-expansion.js'
+import { expandRepeats, resolveRepeatChain } from './repeat-expansion.js'
 import { expandHarmonicSegment } from './harmonic-segments.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { DYNAMIC_VELOCITIES, resolveDirective } from './directives.js'
@@ -158,12 +158,15 @@ function mapScoreConstruction(
       expression: mapItem(node.expression),
     }
   }
-  if (node.type === 'Repeat') {
-    return {
-      ...node,
-      body: node.body.map(mapItem),
-      endings: node.endings.map((ending) => ({ ...ending, body: ending.body.map(mapItem) })),
-    }
+  if (node.type === 'Repeat' || node.type === 'RepeatChain') {
+    const mapRepeat = (repeat: Repeat): Repeat => ({
+      ...repeat,
+      body: repeat.body.map(mapItem),
+      endings: repeat.endings.map((ending) => ({ ...ending, body: ending.body.map(mapItem) })),
+    })
+    return node.type === 'Repeat'
+      ? mapRepeat(node)
+      : { ...node, repeats: node.repeats.map(mapRepeat) }
   }
   if (node.type === 'Group') {
     const expression = mapScoreConstruction(node.expression, mapLeaf)
@@ -1767,6 +1770,7 @@ export function evaluateScoreSemantics(
       // Evaluate the written body once even for x0 so it remains engravable between the markers.
       const iterations = Math.max(1, count)
       for (let iteration = 0; iteration < iterations; iteration++) {
+        if (iteration > 0 && current.replayPrefix?.length) spendFlowBudget(current)
         const iterationNode: Expression = {
           type: 'Sequence',
           items: [...repeatBody(current, iteration)],
@@ -1856,7 +1860,7 @@ export function evaluateScoreSemantics(
         activeVisitor,
       )
     }
-    if (current.type === 'Sequence') {
+    if (current.type === 'Sequence' || current.type === 'RepeatChain') {
       let activeVisitor = visitor
       let elapsed = new Fraction(0)
       let velocity: Fraction | undefined
@@ -1888,10 +1892,16 @@ export function evaluateScoreSemantics(
         }
         return false
       }
+      const sequenceItems = function* (): Generator<Expression> {
+        for (const item of current.type === 'Sequence' ? current.items : [current]) {
+          if (item.type === 'RepeatChain') yield* resolveRepeatChain(item.repeats)
+          else yield item
+        }
+      }
       // Expand a reached repeat in place so one-shot directives can see its
       // items and a jump can still leave later repeats unexpanded.
       const items = function* (): Generator<Expression> {
-        for (const item of current.items) {
+        for (const item of sequenceItems()) {
           if (interrupted()) return
           if (playback && item.type === 'Repeat') {
             const expanded = expandBlockRepeats(

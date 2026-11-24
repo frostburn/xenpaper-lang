@@ -65,6 +65,7 @@ export type Expression =
   | RealLiteral
   | RatioLiteral
   | Repeat
+  | RepeatChain
   | WhileBlock
   | Rest
   | ReturnStatement
@@ -235,7 +236,8 @@ export interface RecordLiteral extends Node {
 export interface FunctionBody extends Node {
   type: 'FunctionBody'
   statements: Expression[]
-  returnStatement: ReturnStatement | null
+  /** @deprecated Earlier parser output stored a trailing return separately. */
+  returnStatement?: ReturnStatement | null
 }
 
 export interface ReturnStatement extends Node {
@@ -522,11 +524,17 @@ export interface Repeat extends Node {
   type: 'Repeat'
   count: IntegerLiteral | null
   body: Expression[]
-  /** Earlier items in the lexical sequence replayed after an implicit repeat's first pass. */
+  /** @deprecated Earlier parser output linked implicit repeats with a replay prefix. */
   replayPrefix?: Expression[]
   endings: RepeatEnding[]
   terminal: ':|' | '|' | '||' | null
   incompleteEndings: boolean
+}
+
+/** Consecutive implicit repeats sharing a written start, in source order. */
+export interface RepeatChain extends Node {
+  type: 'RepeatChain'
+  repeats: Repeat[]
 }
 
 export interface RepeatEnding {

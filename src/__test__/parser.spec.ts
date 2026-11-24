@@ -163,7 +163,7 @@ describe('lexical declarations', () => {
       parameters: [{ name: { name: 'note' } }, { name: { name: 'interval' } }],
       body: {
         type: 'FunctionBody',
-        returnStatement: { type: 'ReturnStatement', value: { operator: '+' } },
+        statements: [{ type: 'ReturnStatement', value: { operator: '+' } }],
       },
     })
     if (declaration.type !== 'FunctionDeclaration') throw new Error('Expected function.')
@@ -200,16 +200,28 @@ describe('lexical declarations', () => {
     })
   })
 
+  it('keeps early and trailing returns in source order', () => {
+    const declaration = parse('fn choose() { let note <- C $ ret note $ ret D }').body[0]
+    if (declaration.type !== 'FunctionDeclaration') throw new Error('Expected a function.')
+    expect(declaration.body.statements.map((statement) => statement.type)).toEqual([
+      'VariableDeclaration',
+      'ReturnStatement',
+      'ReturnStatement',
+    ])
+    expect(declaration.body).not.toHaveProperty('returnStatement')
+  })
+
   it('binds ret loosely across complete score sequences', () => {
     const declaration = parse('fn LICC() { ret @2 D E F G E= C D== }').body[0]
     expect(declaration).toMatchObject({
       type: 'FunctionDeclaration',
-      body: { returnStatement: { value: { type: 'Sequence' } } },
+      body: { statements: [{ type: 'ReturnStatement', value: { type: 'Sequence' } }] },
     })
     if (declaration.type !== 'FunctionDeclaration') throw new Error('Expected function.')
-    const returned = declaration.body.returnStatement?.value
-    if (returned?.type !== 'Sequence') throw new Error('Expected returned sequence.')
-    expect(returned.items.slice(0, 3)).toMatchObject([
+    const [returned] = declaration.body.statements
+    if (returned?.type !== 'ReturnStatement' || returned.value.type !== 'Sequence')
+      throw new Error('Expected returned sequence.')
+    expect(returned.value.items.slice(0, 3)).toMatchObject([
       { type: 'Directive', name: 'subdivision' },
       { type: 'PitchLiteral', raw: 'D' },
       { type: 'PitchLiteral', raw: 'E' },

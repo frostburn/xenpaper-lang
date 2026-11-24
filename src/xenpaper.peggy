@@ -31,27 +31,12 @@
   const sequence = (items, loc = location()) =>
     items.length === 1 ? items[0] : node('Sequence', { items }, loc);
 
-  const implicitRepeats = new WeakSet();
-
-  const prependImplicitRepeatScope = (expression, prefix) => {
-    if (implicitRepeats.has(expression)) {
-      expression.replayPrefix = [...prefix, ...(expression.replayPrefix ?? [])];
-    } else if (expression?.type === 'Sequence') {
-      for (const item of expression.items) prependImplicitRepeatScope(item, prefix);
-    }
-  };
-
-  const implicitRepeat = (body, result, remainder) => {
-    const repeat = node('Repeat', {
-      count: null,
-      body: [body],
-      endings: result.endings,
-      terminal: result.terminal,
-      incompleteEndings: result.incomplete,
+  const repeatSequence = (repeats, tail) => {
+    const chain = repeats.length === 1 ? repeats[0] : node('RepeatChain', { repeats }, {
+      ...repeats[0].location,
+      end: repeats.at(-1).location.end,
     });
-    implicitRepeats.add(repeat);
-    if (remainder) prependImplicitRepeatScope(remainder, [repeat]);
-    return sequence(remainder ? [repeat, remainder] : [repeat]);
+    return tail ? sequence([chain, tail]) : chain;
   };
 
   const parallel = (branches, loc = location()) =>
@@ -100,40 +85,44 @@ StatementDelimiter
   = "$" { return null; }
 
 ParallelExpression
-  = first:SequenceExpression
-    rest:(Spacing "," Spacing branch:SequenceExpression { return branch; })* {
-      return parallel([first, ...rest]);
-    }
+  = branches:SequenceExpression|1.., Comma| { return parallel(branches); }
+
+Comma
+  = Spacing "," Spacing
 
 // A repeat end without a matching repeat start repeats from the beginning of
 // its lexical sequence, which stops at a statement or hard boundary. Explicit
 // repeat bodies reserve their own `:|` delimiter and can span statements.
 ScopedParallelExpression
-  = body:ParallelExpression result:RepeatEndings !(Spacing ",")
-    remainder:(Spacing item:ScopedParallelExpression { return item; })? {
-      return implicitRepeat(body, result, remainder);
+  = repeats:ImplicitParallelRepeat|1.., Spacing| tail:(Spacing @ScopedBranches)? {
+      return repeatSequence(repeats, tail);
     }
-  / first:ScopedSequenceExpression
-    rest:(Spacing "," Spacing branch:ScopedSequenceExpression { return branch; })* {
-      return parallel([first, ...rest]);
+  / ScopedBranches
+
+ImplicitParallelRepeat
+  = body:ParallelExpression ending:RepeatEndings !Comma {
+      return node('Repeat', { count: null, body: [body], ...ending });
     }
 
+ScopedBranches
+  = branches:ScopedSequenceExpression|1.., Comma| { return parallel(branches); }
+
 ScopedSequenceExpression
-  = body:SequenceExpression result:RepeatEndings
-    remainder:(Spacing item:ScopedSequenceExpression { return item; })? {
-      return implicitRepeat(body, result, remainder);
+  = repeats:ImplicitSequenceRepeat|1.., Spacing| tail:(Spacing @SequenceExpression)? {
+      return repeatSequence(repeats, tail);
     }
   / SequenceExpression
+
+ImplicitSequenceRepeat
+  = body:SequenceExpression ending:RepeatEndings {
+      return node('Repeat', { count: null, body: [body], ...ending });
+    }
 
 StatementSeparators
   = (Spacing StatementDelimiter)+ Spacing
 
 ScopedScoreList
-  = first:ScopedParallelExpression
-    rest:(StatementSeparators @ScopedParallelExpression)*
-    StatementSeparators? {
-      return [first, ...rest];
-    }
+  = @ScopedParallelExpression|1.., StatementSeparators| StatementSeparators?
 
 GroupedScore
   = body:ScopedScoreList {
@@ -146,16 +135,10 @@ GroupedScore
 // that a semicolon introducing another context statement terminates the scale
 // value. Keeping this distinction here preserves bar rests in normal scores.
 ContextScaleParallelExpression
-  = first:ContextScaleSequenceExpression
-    rest:(Spacing "," Spacing branch:ContextScaleSequenceExpression { return branch; })* {
-      return parallel([first, ...rest]);
-    }
+  = branches:ContextScaleSequenceExpression|1.., Comma| { return parallel(branches); }
 
 ContextScaleSequenceExpression
-  = first:SequenceItem
-    rest:(Spacing !ContextStatementSeparator item:SequenceItem { return item; })* {
-      return sequence([first, ...rest]);
-    }
+  = items:SequenceItem|1.., (Spacing !ContextStatementSeparator)| { return sequence(items); }
 
 ContextStatementSeparator
   = ";" &(Spacing ContextStatement)
@@ -164,10 +147,7 @@ ContextStatementSeparator
 // adjacent self-delimiting items (`0.2`, `C[D E]F`, `C=F`) are parsed by
 // ordinary PEG repetition. Individual literal rules decide where tokens end.
 SequenceExpression
-  = first:SequenceItem
-    rest:(Spacing item:SequenceItem { return item; })* {
-      return sequence([first, ...rest]);
-    }
+  = items:SequenceItem|1.., Spacing| { return sequence(items); }
 
 SequenceItem
   = LoopJump / BindingAssignment / ThrowStatement / ReturnStatement / Expression
@@ -378,10 +358,8 @@ PrimaryExpression
   / IdentifierExpression
 
 LambdaExpression
-  = "(" Spacing parameters:(first:LocatedIdentifier rest:(Spacing "," Spacing parameter:LocatedIdentifier { return parameter; })* {
-      return [first, ...rest];
-    })? Spacing ")" Spacing "=>" Spacing body:ValueExpression {
-      return node('LambdaExpression', { parameters: parameters ?? [], body });
+  = "(" Spacing parameters:LocatedIdentifier|.., Comma| Spacing ")" Spacing "=>" Spacing body:ValueExpression {
+      return node('LambdaExpression', { parameters, body });
     }
 
 DrumSampleLiteral
@@ -449,18 +427,14 @@ MonzoLiteral
     }
 
 MonzoComponents
-  = first:MonzoComponent rest:(ComponentSeparator value:MonzoComponent { return value; })* {
-      return [first, ...rest];
-    }
+  = MonzoComponent|1.., ComponentSeparator|
 
 MonzoComponent
   = $(Sign? UnsignedInteger ("/" UnsignedInteger)?)
 
 MonzoSubgroup
-  = first:MonzoSubgroupComponent
-    rest:("." !"." value:MonzoSubgroupComponent { return value; })*
-    continuation:(".." { return true; })? {
-      return { components: [first, ...rest], continuation: continuation ?? false };
+  = components:MonzoSubgroupComponent|1.., ("." !".")| continuation:".."? {
+      return { components, continuation: Boolean(continuation) };
     }
 
 MonzoSubgroupComponent
@@ -482,14 +456,8 @@ HardBoundary
   = "||" { return node('HardBoundary', { raw: "||" }); }
 
 RepeatExpression
-  = "|:" Spacing count:RepeatCount? Spacing body:RepeatBody result:RepeatEndings {
-      return node('Repeat', {
-        count,
-        body,
-        endings: result.endings,
-        terminal: result.terminal,
-        incompleteEndings: result.incomplete,
-      });
+  = "|:" Spacing count:RepeatCount? Spacing body:RepeatBody ending:RepeatEndings {
+      return node('Repeat', { count, body, ...ending });
     }
 
 RepeatEndings
@@ -501,9 +469,9 @@ RepeatEndings
       / Spacing terminal:":|" { return { rest: [], terminal, incomplete: true }; }
     ) {
       const { rest, terminal, incomplete } = tail;
-      return { endings: [{ ...first, body: firstBody }, ...rest], terminal, incomplete };
+      return { endings: [{ ...first, body: firstBody }, ...rest], terminal, incompleteEndings: incomplete };
     }
-  / Spacing ":|" { return { endings: [], terminal: ":|", incomplete: false }; }
+  / Spacing ":|" { return { endings: [], terminal: ":|", incompleteEndings: false }; }
 
 EndingBody
   = first:EndingParallelExpression?
@@ -517,18 +485,16 @@ EndingParallelExpression
   // not sufficient: a detached bar may terminate this repeat before another
   // implicit-start repeat begins.
   = expression:ParallelExpression &(Spacing RepeatEndEndingMarker) { return expression; }
-  / first:EndingSequenceExpression
-    rest:(Spacing "," Spacing branch:EndingSequenceExpression { return branch; })* {
-      return parallel([first, ...rest]);
-    }
+  / branches:EndingSequenceExpression|1.., Comma| { return parallel(branches); }
 
 EndingSequenceExpression
   // A detached single bar (or one at EOF) terminates the final alternate
   // ending. An attached bar remains a sequence item, as in `D|E`, and a
   // continuation after the bar remains attached regardless of whitespace.
-  = first:SequenceItem rest:(Spacing !("|" (RequiredSpacing !("=") / !.)) item:SequenceItem { return item; })* {
-      return sequence([first, ...rest]);
-    }
+  = items:SequenceItem|1.., (Spacing !DetachedEndingBar)| { return sequence(items); }
+
+DetachedEndingBar
+  = "|" (RequiredSpacing !"=" / !.)
 
 FirstEndingMarker
   = "|" number:EndingNumber { return { number, markerLocation: location() }; }
@@ -635,15 +601,7 @@ GlissDirectiveBody
     }
 
 GlissDirectiveArguments
-  = "(" Spacing args:GlissCurveNameList? Spacing ")" {
-      return args ?? [];
-    }
-
-GlissCurveNameList
-  = first:GlissCurveName
-    rest:(Spacing "," Spacing argument:GlissCurveName { return argument; })* {
-      return [first, ...rest];
-    }
+  = "(" Spacing @GlissCurveName|.., Comma| Spacing ")"
 
 GlissCurveName
   = name:$([A-Za-z_] [A-Za-z0-9_-]*) {
@@ -705,15 +663,7 @@ NamedDirectiveBody
     }
 
 DirectiveArguments
-  = "(" Spacing args:DirectiveArgumentList? Spacing ")" {
-      return args ?? [];
-    }
-
-DirectiveArgumentList
-  = first:DirectiveArgument
-    rest:(Spacing "," Spacing argument:DirectiveArgument { return argument; })* {
-      return [first, ...rest];
-    }
+  = "(" Spacing @DirectiveArgument|.., Comma| Spacing ")"
 
 DirectiveArgument
   // Named arguments are deliberately semantic-free so second-party directive
@@ -742,10 +692,7 @@ PitchContextChange
     }
 
 ContextStatementList
-  = first:ContextStatement
-    rest:(Spacing ";" Spacing statement:ContextStatement { return statement; })* {
-      return [first, ...rest];
-    }
+  = ContextStatement|1.., (Spacing ";" Spacing)|
 
 ContextAssignmentStart
   = ("sig"i / "key"i / "root"i) !IdentifierContinue Spacing "<-"
@@ -829,18 +776,13 @@ ContextValue
   / ValueExpression
 
 MappingLiteral
-  = ("<" / "⟨") Spacing first:ValueExpression
-    rest:(ComponentSeparator value:ValueExpression { return value; })*
+  = ("<" / "⟨") Spacing values:ValueExpression|1.., ComponentSeparator|
     Spacing close:("]" / ">") {
-      return node('MappingLiteral', {
-        values: [first, ...rest],
-        closingDelimiter: close,
-      });
+      return node('MappingLiteral', { values, closingDelimiter: close });
     }
 
 ComponentSeparator
-  = Spacing "," Spacing
-  / RequiredSpacing
+  = Comma / RequiredSpacing
 
 ContextPreset
   = raw:$("Pythagorean"i / "JustIntonation"i / "Untempered"i / "JI"i)
@@ -874,7 +816,7 @@ CallName
   = !("v" !IdentifierContinue) @MusicalIdentifier
 
 CallArguments
-  = "(" Spacing args:CallArgumentList? Spacing ")" { return args ?? []; }
+  = "(" Spacing @Expression|.., Comma| Spacing ")"
 
 // Declarations are score items with no duration. Their bindings become visible
 // only to following items in the same lexical sequence. Nested groups and
@@ -888,16 +830,13 @@ VariableDeclaration
 // A newline can end the binding value between score items. An expression can
 // still consume newlines itself, for example inside parentheses or after an operator.
 BindingValue
-  = first:BindingSequence
-    rest:([ \t]* "," Spacing branch:BindingSequence { return branch; })* {
-      return parallel([first, ...rest]);
-    }
+  = branches:BindingSequence|1.., (InlineSpacing "," Spacing)| { return parallel(branches); }
 
 BindingSequence
-  = !StatementStart first:Expression
-    rest:([ \t]* !StatementStart item:Expression { return item; })* {
-      return sequence([first, ...rest]);
-    }
+  = items:(!StatementStart @Expression)|1.., InlineSpacing| { return sequence(items); }
+
+InlineSpacing
+  = [ \t]*
 
 StatementStart
   = ("let" / "fn" / "ret" / "throw" / "try" / "if" / "for" / "while" / "break" / "continue") !IdentifierContinue
@@ -932,7 +871,7 @@ RecordLiteral
     }
 
 RecordEntries
-  = first:RecordEntry rest:(Spacing "," Spacing @RecordEntry)* (Spacing ",")? { return [first, ...rest]; }
+  = @RecordEntry|1.., Comma| (Spacing ",")?
 
 RecordEntry
   = key:RecordKey Spacing ":" Spacing value:Expression { return node('RecordEntry', { key, value }); }
@@ -942,8 +881,8 @@ RecordKey
 
 FunctionDeclaration
   = "fn" !IdentifierContinue RequiredSpacing name:LocatedIdentifier Spacing "(" Spacing
-    parameters:(first:FunctionParameter rest:(Spacing "," Spacing parameter:FunctionParameter { return parameter; })* { return [first, ...rest]; })? Spacing ")" Spacing body:FunctionBody {
-      return node('FunctionDeclaration', { name, parameters: parameters ?? [], body });
+    parameters:FunctionParameter|.., Comma| Spacing ")" Spacing body:FunctionBody {
+      return node('FunctionDeclaration', { name, parameters, body });
     }
 
 FunctionParameter
@@ -967,16 +906,15 @@ CoercionAnnotation
     }
 
 FunctionBody
-  = "{" Spacing statements:(
-      statement:FunctionStatement Spacing (StatementDelimiter Spacing)? { return statement; }
-      / statement:ReturnStatement Spacing StatementDelimiter Spacing !"}" { return statement; }
-    )* returnStatement:ReturnStatement? Spacing (StatementDelimiter Spacing)? "}" {
-      return node('FunctionBody', { statements, returnStatement });
+  = "{" Spacing statements:(@FunctionStatement Spacing (StatementDelimiter Spacing)?)*
+    (StatementDelimiter Spacing)? "}" {
+      return node('FunctionBody', { statements });
     }
 
 FunctionStatement
   = VariableDeclaration / FunctionDeclaration / BindingAssignment / ThrowStatement
   / IfBlock / ForBlock / WhileBlock / TryBlock / LoopJump
+  / @ReturnStatement &(Spacing (StatementDelimiter / "}"))
 
 ReturnStatement
   // Return binds more loosely than sequencing and parallel composition so a
@@ -990,12 +928,6 @@ LocatedIdentifier
   // over the lexical namespace rather than becoming context-dependent.
   = !(MosPitchLiteral / PitchLiteral) name:MusicalIdentifier {
       return node('Identifier', { name });
-    }
-
-CallArgumentList
-  = first:Expression
-    rest:(Spacing "," Spacing argument:Expression { return argument; })* {
-      return [first, ...rest];
     }
 
 IdentifierExpression
@@ -1082,8 +1014,8 @@ MosElement
   / pattern:$([Ls]+) {
       return node('MosAbstractPattern', { pattern });
     }
-  / first:UnsignedInteger rest:(Spacing "," Spacing value:UnsignedInteger { return value; })+ {
-      return node('MosIntegerPattern', { values: [first, ...rest] });
+  / values:UnsignedInteger|2.., Comma| {
+      return node('MosIntegerPattern', { values });
     }
   / pattern:$([0-9]+) {
       return node('MosIntegerPattern', { values: [...pattern] });
@@ -1102,20 +1034,14 @@ MosUdpValue
     }
 
 SignaturePitchList
-  = first:SignaturePitchLiteral
-    rest:(RequiredSpacing pitch:SignaturePitchLiteral { return pitch; })* {
-      return [first, ...rest];
-    }
+  = SignaturePitchLiteral|1.., RequiredSpacing|
 
 KeyModeName
   = mode:$("Lydian"i / "Ionian"i / "Mixolydian"i / "Dorian"i / "Aeolian"i / "Phrygian"i / "Locrian"i / "Major"i / "Minor"i)
     !IdentifierContinue { return mode.toLowerCase(); }
 
 MosSignaturePitchList
-  = first:MosSignaturePitchLiteral
-    rest:(RequiredSpacing pitch:MosSignaturePitchLiteral { return pitch; })* {
-      return [first, ...rest];
-    }
+  = MosSignaturePitchLiteral|1.., RequiredSpacing|
 
 SignaturePitchLiteral
   = modifiers:PitchModifier* pitch:PitchLiteral {

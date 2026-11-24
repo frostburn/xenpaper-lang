@@ -24,6 +24,7 @@ export function needsScorePlayback(node: Expression): boolean {
     case 'PitchContextChange':
     case 'MosDeclaration':
     case 'Repeat':
+    case 'RepeatChain':
     case 'IfBlock':
     case 'TryBlock':
     case 'ForBlock':

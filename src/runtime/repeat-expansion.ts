@@ -1,5 +1,5 @@
 import type { LocationRange } from 'peggy'
-import type { Program } from '../parser.generated.js'
+import type { Node, Program } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
 import type {
   ExpandedNode,
@@ -17,6 +17,16 @@ type SyntaxNode = {
 }
 
 class ExpansionLimitError extends Error {}
+
+/** Resolve each reached repeat against the sections already played in this chain. */
+export function* resolveRepeatChain<T extends Node>(repeats: readonly T[]): Generator<T> {
+  const prefix: T[] = []
+  for (const written of repeats) {
+    const repeat = prefix.length ? { ...written, replayPrefix: [...prefix] } : written
+    prefix.push(repeat)
+    yield repeat
+  }
+}
 
 function isNode(value: unknown): value is SyntaxNode {
   return (
@@ -55,6 +65,13 @@ export function expandRepeats(
   }
 
   const cloneNode = (node: SyntaxNode, path: ExpansionPath): ExpandedNode[] => {
+    if (node.type === 'RepeatChain' && !deferRepeats) {
+      const result: ExpandedNode[] = []
+      for (const repeat of resolveRepeatChain(node.repeats as SyntaxNode[])) {
+        for (const item of cloneNode(repeat, path)) result.push(item)
+      }
+      return result
+    }
     if (node.type === 'Repeat' && !deferRepeats) {
       if (node.incompleteEndings) {
         diagnostics.push({
@@ -144,7 +161,7 @@ export function expandRepeats(
         appendChildren(children, body, iterationPath)
         const endingStart = children.length
         appendChildren(children, endingsByIteration.get(iteration) ?? [], iterationPath)
-        const emptyEndingFree = !endings.length && !children.length
+        const emptyEndingFree = !endings.length && !children.length && !replayPrefix.length
         // An empty, ending-free repeat has no playback occurrences. Preserve
         // mode emits its authored boundaries once for semantic validation,
         // then takes the same fast path rather than expanding every iteration.
@@ -212,7 +229,7 @@ export function expandRepeats(
       node.type === 'BindingAssignment' ||
       node.type === 'FunctionDeclaration' ||
       node.type === 'CallExpression' ||
-      (node.type === 'Repeat' && deferRepeats)
+      ((node.type === 'Repeat' || node.type === 'RepeatChain') && deferRepeats)
     )
       return [clone as ExpandedNode]
     for (const [key, value] of Object.entries(node)) {

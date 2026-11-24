@@ -14,7 +14,7 @@ const collectSyntaxHashes = (value: unknown, source: string, hashes: Set<number>
   const node = value as Partial<Node> & Record<string, unknown>
   let containsChildNode = false
   for (const [key, child] of Object.entries(node)) {
-    if (key === 'location' || key === 'replayPrefix') continue
+    if (key === 'location') continue
     containsChildNode = collectSyntaxHashes(child, source, hashes) || containsChildNode
   }
   if (!node.type || !node.location) return containsChildNode

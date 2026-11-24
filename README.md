@@ -45,6 +45,12 @@ articulation and groove, still on a rational grid. Neither API schedules audio
 or converts beats to seconds. `expandRepeats()` is also available for tooling
 that needs source occurrences and their expansion paths.
 
+For AST consumers, `FunctionBody.statements` contains every statement in source
+order, including a trailing `ReturnStatement`. Consecutive implicit repeats
+share a `RepeatChain` whose `repeats` array contains each written `Repeat`
+once. Runtime consumers can also read older trees with `returnStatement` or
+`replayPrefix` fields.
+
 ## Development
 
 From a fresh checkout, use a supported Node.js release (for example, Node 24.12
@@ -387,6 +393,8 @@ Both scores play `1 2 3`.
 An implicit repeat starts after the last `$` or `||` in its scope.
 `C $ D :|` plays `C D D`. An explicit repeat can span a statement boundary,
 so `|: C $ D :|` plays `C D C D`.
+In `C :| D :|` both repeat ends refer to the same start, so the score plays
+`C C D C C D`.
 
 Parameters may declare coercions and trailing defaults:
 
