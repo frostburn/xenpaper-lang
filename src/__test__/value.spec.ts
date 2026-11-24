@@ -84,6 +84,29 @@ describe('Xenpaper value arithmetic', () => {
     expect(unity.equals(1)).toBe(true)
   })
 
+  it('keeps large exact values usable when they cannot fit in a fraction', () => {
+    const large = new Value(2).pow(1024)
+    const tiny = new Value(2).pow(-1200)
+    expect(large.exactRational()).toBeNull()
+    expect(tiny.exactRational()).toBeNull()
+    const nearLimit = new Value(2).pow(52)
+    expect(nearLimit.add(nearLimit).equals(new Value(2).pow(53))).toBe(true)
+    expect(large.add(0).equals(large)).toBe(true)
+    expect(large.sub(large).equals(0)).toBe(true)
+    expect(large.log(2).equals(1024)).toBe(true)
+    expect(tiny.log(2).equals(-1200)).toBe(true)
+  })
+
+  it('orders exact numbers when floating-point magnitudes are identical', () => {
+    const large = new Value(2).pow(1024)
+    const larger = new Value(2).pow(1025)
+    const tiny = new Value(2).pow(-1200)
+    expect(large.compare(larger)).toBeLessThan(0)
+    expect(large.neg().compare(larger.neg())).toBeGreaterThan(0)
+    expect(tiny.compare(0)).toBeGreaterThan(0)
+    expect(tiny.compare(tiny.div(2))).toBeGreaterThan(0)
+  })
+
   it('accepts bigint integers without retaining bigint state', () => {
     const huge = 2n ** 100n * 3n
     const value = new Value(huge)

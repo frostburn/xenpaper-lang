@@ -3,13 +3,18 @@ import type { CoercionAnnotation, Expression } from '../parser.js'
 import { Value } from '../value.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { evaluateLiteral } from './literals.js'
-import type { EvaluatedLiteral, LexicalEnvironment } from './types.js'
+import type { EvaluatedLiteral, LambdaValue, LexicalEnvironment } from './types.js'
 import { extendLexicalEnvironment } from './types.js'
 
 export type ExpressionEvaluator = (
   node: Expression,
   environment?: LexicalEnvironment,
 ) => ExpressionEvaluationResult
+
+type InvokeCallback = (
+  callback: LambdaValue,
+  variables: ReadonlyMap<string, EvaluatedLiteral>,
+) => EvaluatedLiteral | undefined
 
 type BuiltinCoercion = 'ratio' | 'pitch' | 'integer' | 'container' | undefined
 
@@ -161,13 +166,28 @@ abstract class Builtin {
     const diagnostics = evaluated.flatMap((argument) => argument.diagnostics)
     if (!evaluated.every((argument) => 'value' in argument)) return { diagnostics }
     const arguments_ = evaluated.map((argument) => (argument as { value: EvaluatedLiteral }).value)
-    return { value: this.call(arguments_, evaluate), diagnostics }
+    const invokeCallback: InvokeCallback = (callback, variables) => {
+      // The callback captures lexical bindings. Active calls and the budget
+      // follow the current invocation.
+      const scope = extendLexicalEnvironment(callback.environment, {
+        variables,
+        calls: environment.calls,
+      })
+      const result = evaluate(callback.body, {
+        ...scope,
+        functionBudget: environment.functionBudget,
+      })
+      diagnostics.push(...result.diagnostics)
+      return 'value' in result ? result.value : undefined
+    }
+    const value = this.call(arguments_, invokeCallback)
+    return value ? { value, diagnostics } : { diagnostics }
   }
 
   protected abstract call(
     arguments_: readonly EvaluatedLiteral[],
-    evaluate: ExpressionEvaluator,
-  ): EvaluatedLiteral
+    invokeCallback: InvokeCallback,
+  ): EvaluatedLiteral | undefined
 
   protected requireContainer(arguments_: readonly EvaluatedLiteral[], index = 0) {
     const argument = arguments_[index]
@@ -258,8 +278,8 @@ class ArrayReduceBuiltin extends Builtin {
 
   protected call(
     arguments_: readonly EvaluatedLiteral[],
-    evaluate: ExpressionEvaluator,
-  ): EvaluatedLiteral {
+    invokeCallback: InvokeCallback,
+  ): EvaluatedLiteral | undefined {
     const callback = arguments_[0]
     if (callback?.kind !== 'lambda' || callback.parameters.length !== 2)
       throw new TypeError('arrayReduce() expects a two-parameter lambda.')
@@ -271,16 +291,15 @@ class ArrayReduceBuiltin extends Builtin {
       )
     let accumulator = initial ?? items[0]!
     for (const item of initial ? items : items.slice(1)) {
-      const environment = extendLexicalEnvironment(callback.environment, {
-        variables: new Map([
+      const reduced = invokeCallback(
+        callback,
+        new Map([
           [callback.parameters[0]!, accumulator],
           [callback.parameters[1]!, item],
         ]),
-      })
-      const reduced = evaluate(callback.body, environment)
-      if (!('value' in reduced))
-        throw new TypeError(reduced.diagnostics[0]?.message ?? 'arrayReduce() callback failed.')
-      accumulator = reduced.value
+      )
+      if (!reduced) return undefined
+      accumulator = reduced
     }
     return accumulator
   }
@@ -293,24 +312,22 @@ class ArrayMapBuiltin extends Builtin {
 
   protected call(
     arguments_: readonly EvaluatedLiteral[],
-    evaluate: ExpressionEvaluator,
-  ): EvaluatedLiteral {
+    invokeCallback: InvokeCallback,
+  ): EvaluatedLiteral | undefined {
     const callback = arguments_[0]
     if (callback?.kind !== 'lambda' || callback.parameters.length !== 1)
       throw new TypeError('arrayMap() expects a one-parameter lambda.')
     const origins = this.origins(arguments_)
+    const values: EvaluatedLiteral[] = []
+    for (const item of this.requireContainer(arguments_, 1)) {
+      const mapped = invokeCallback(callback, new Map([[callback.parameters[0]!, item]]))
+      if (!mapped) return undefined
+      values.push(mapped)
+    }
     return {
       ...arguments_[1],
       kind: 'container',
-      values: this.requireContainer(arguments_, 1).map((item) => {
-        const environment = extendLexicalEnvironment(callback.environment, {
-          variables: new Map([[callback.parameters[0]!, item]]),
-        })
-        const mapped = evaluate(callback.body, environment)
-        if (!('value' in mapped))
-          throw new TypeError(mapped.diagnostics[0]?.message ?? 'arrayMap() callback failed.')
-        return mapped.value
-      }),
+      values,
       value: new Value(0),
       origins,
     }
@@ -369,7 +386,11 @@ class SortedBuiltin extends Builtin {
     return {
       ...arguments_[0],
       kind: 'container',
-      values: [...numeric].sort((a, b) => a.value.valueOf() - b.value.valueOf()),
+      values: [...numeric].sort((a, b) =>
+        a.value.dimensions.equals(b.value.dimensions)
+          ? a.value.compare(b.value)
+          : a.value.valueOf() - b.value.valueOf(),
+      ),
       value: new Value(0),
       origins: this.origins(arguments_),
     }
