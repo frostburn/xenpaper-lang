@@ -6,6 +6,7 @@ import { evaluateBuiltinArgument, evaluateBuiltinCall, requireInteger } from './
 import { evaluateLiteral, type NumericLiteralNode } from './literals.js'
 import { executeFunctionStatements, type FunctionBindings } from './function-statements.js'
 import { expandHarmonicSegment } from './harmonic-segments.js'
+import { needsScorePlayback } from './score-fragments.js'
 import { equaveShift as modifierEquaveShift, equaveShifts } from './pitch-modifiers.js'
 import type {
   EvaluatedLiteral,
@@ -682,7 +683,7 @@ function compareOperands(
 
 export function isTruthy(value: EvaluatedLiteral): boolean {
   if (value.kind === 'undefined') return false
-  if (value.kind === 'absolutePitch') return true
+  if (value.kind === 'absolutePitch' || value.kind === 'scoreFragment') return true
   if (value.kind === 'container') return value.values.length > 0
   return !value.value.isZero()
 }
@@ -734,7 +735,9 @@ function binary(
     left.kind === 'undefined' ||
     right.kind === 'undefined' ||
     left.kind === 'lambda' ||
-    right.kind === 'lambda'
+    right.kind === 'lambda' ||
+    left.kind === 'scoreFragment' ||
+    right.kind === 'scoreFragment'
   )
     throw new TypeError(`Operator ${operator} requires numeric operands.`)
   switch (operator) {
@@ -791,13 +794,40 @@ function annotateReference(value: EvaluatedLiteral, origin: SourceOrigin): Evalu
   return { ...value, origins }
 }
 
-/** Evaluate the arithmetic subset of the parser AST without throwing for source errors. */
+/** Capture values from mutable function frames before their assignments can change them. */
+function captureScoreEnvironment(environment: LexicalEnvironment): LexicalEnvironment {
+  let scope = environment
+  const functionFrames: LexicalEnvironment[] = []
+  while (scope.functionBudget && scope.parent) {
+    functionFrames.push(scope)
+    scope = scope.parent
+  }
+  for (const frame of functionFrames.reverse()) {
+    scope = { ...frame, parent: scope, variables: new Map(frame.variables) }
+  }
+  return scope
+}
+
+/** Evaluate a value or capture score syntax without throwing for source errors. */
 export function evaluateExpression(
   node: Expression,
   mapping: PrimeMapping | PitchContext = DEFAULT_PITCH_CONTEXT,
   environment: LexicalEnvironment = preludeEnvironment(),
 ): ExpressionEvaluationResult {
   try {
+    if (needsScorePlayback(node)) {
+      return {
+        value: {
+          kind: 'scoreFragment',
+          expression: node,
+          environment: captureScoreEnvironment(environment),
+          pitchContext: 'rootPitch' in mapping ? mapping : createPitchContext(mapping),
+          value: new Value(0),
+          origins: [{ location: node.location, role: 'structural' }],
+        },
+        diagnostics: [],
+      }
+    }
     if (node.type === 'DegreeLiteral') {
       const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
       const degree = Number(node.degree)
@@ -928,7 +958,8 @@ export function evaluateExpression(
       if (
         operand.value.kind === 'container' ||
         operand.value.kind === 'undefined' ||
-        operand.value.kind === 'lambda'
+        operand.value.kind === 'lambda' ||
+        operand.value.kind === 'scoreFragment'
       )
         throw new TypeError('Pitch modifiers require a numeric operand.')
       const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
@@ -1035,7 +1066,8 @@ export function evaluateExpression(
       if (
         operand.value.kind === 'container' ||
         operand.value.kind === 'undefined' ||
-        operand.value.kind === 'lambda'
+        operand.value.kind === 'lambda' ||
+        operand.value.kind === 'scoreFragment'
       )
         throw new TypeError('Unary operators require a numeric operand.')
       if (node.operator === '+') return operand

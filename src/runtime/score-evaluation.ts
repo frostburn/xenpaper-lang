@@ -511,21 +511,21 @@ function sequence(
   }
 }
 
-/** Retain the invocation site on every note produced by a function body. */
-function annotateFunctionCall(shape: ScoreShape, callOrigin: SourceOrigin): ScoreShape {
+/** Retain the use site on notes produced by a function or stored fragment. */
+function annotateScoreUse(shape: ScoreShape, callOrigin: SourceOrigin): ScoreShape {
   if (shape.kind === 'attack') return { ...shape, origins: [...shape.origins, callOrigin] }
   if (shape.kind === 'sequence')
     return {
       ...shape,
-      children: shape.children.map((child) => annotateFunctionCall(child, callOrigin)),
+      children: shape.children.map((child) => annotateScoreUse(child, callOrigin)),
     }
   if (shape.kind === 'parallel')
     return {
       ...shape,
-      branches: shape.branches.map((branch) => annotateFunctionCall(branch, callOrigin)),
+      branches: shape.branches.map((branch) => annotateScoreUse(branch, callOrigin)),
     }
   if (shape.kind === 'drone' && shape.template)
-    return { ...shape, template: annotateFunctionCall(shape.template, callOrigin) }
+    return { ...shape, template: annotateScoreUse(shape.template, callOrigin) }
   return shape
 }
 
@@ -1579,7 +1579,7 @@ export function evaluateScoreSemantics(
         return {
           ...returned,
           shape: {
-            ...annotateFunctionCall(returned.shape, origin(current)),
+            ...annotateScoreUse(returned.shape, origin(current)),
             isolatedDirectiveScope: true,
           },
           diagnostics,
@@ -2572,6 +2572,34 @@ export function evaluateScoreSemantics(
       }
     }
     const value = evaluateExpression(current, context, environment)
+    if ('value' in value && value.value.kind === 'scoreFragment') {
+      const fragment = value.value
+      const scope = changeVisitor(visitor, (context) => ({
+        ...context,
+        pitchContext: fragment.pitchContext,
+        lexicalEnvironment: {
+          ...extendLexicalEnvironment(fragment.environment, {
+            calls: environment?.calls ?? EMPTY_LEXICAL_ENVIRONMENT.calls,
+          }),
+          functionBudget: environment?.functionBudget,
+        },
+      })).spawn({ loop: undefined, subdivisionContext: visitor.scope.resolve })
+      const body: Extract<Expression, { type: 'Sequence' }> =
+        fragment.expression.type === 'Sequence'
+          ? fragment.expression
+          : {
+              type: 'Sequence',
+              items: [fragment.expression],
+              location: fragment.expression.location,
+            }
+      const played = visitBlock(body, scope)
+      const diagnostics = [...value.diagnostics, ...played.diagnostics]
+      if (!hasShape(played)) return { diagnostics }
+      return {
+        shape: { ...annotateScoreUse(played.shape, origin(current)), isolatedDirectiveScope: true },
+        diagnostics,
+      }
+    }
     if ('value' in value && value.value.kind === 'container') {
       const variables = new Map<string, EvaluatedLiteral>()
       const fragment = (item: EvaluatedLiteral): Expression => {

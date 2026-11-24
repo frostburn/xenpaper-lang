@@ -473,7 +473,11 @@ export function applyPitchContextChange(
       })
       const degrees = evaluatedDegrees.map((value) => {
         if (value.kind === 'absolutePitch') return value.rootOffset
-        if (value.kind === 'undefined' || value.kind === 'container')
+        if (
+          value.kind === 'undefined' ||
+          value.kind === 'container' ||
+          value.kind === 'scoreFragment'
+        )
           throw new TypeError('Degree assignments require pitch intervals.')
         return value.kind === 'pitchOffset' ? value.value : Value.pitch(value.value)
       })

@@ -91,6 +91,7 @@ export type {
   ParallelShape,
   RestShape,
   ScoreShape,
+  ScoreFragmentValue,
   ScoreVisitorContext,
   SequenceShape,
   ShapeBase,

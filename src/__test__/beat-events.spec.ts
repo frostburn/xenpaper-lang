@@ -29,6 +29,46 @@ const audibleResult = (source: string) => {
 
 describe('beat event expansion', () => {
   it.each([
+    ['let phrase <- C . D $ phrase phrase', 'C . D C . D'],
+    ['let phrase <- C -> C $ phrase', 'C -> C'],
+    ['let phrase <- C = = $ phrase', 'C=='],
+    ['let phrase <- [C . D] $ phrase', '[C . D]'],
+    ['let phrase <- C . D,E $ phrase', 'C . D,E'],
+    ['let phrase <- C $ phrase <- D . E $ phrase', 'D . E'],
+    ['let phrase <- |: C |¹ D :|² E || $ phrase phrase', 'C D C E C D C E'],
+    ['let phrase <- (C D :|) $ phrase', 'C D C D'],
+    ['let phrase <- @2 C . D $ phrase E', '(@2 C . D) E'],
+    ['fn play(item) { ret item } $ play((C . D))', 'C . D'],
+    ['fn build() { ret |: C D :| } $ let phrase <- build() $ phrase', 'C D C D'],
+    [
+      'fn build(item) { let phrase <- item . C $ item <- E $ ret phrase } $ build(D)',
+      'let note <- D $ note . C',
+    ],
+  ])('plays the stored score in %s', (source, expected) => {
+    expect(audibleResult(source)).toEqual(audibleResult(expected))
+  })
+
+  it('plays captured tuning at the current pulse', () => {
+    const result = score('let phrase <- 1d . 2d $ {24edo} @2 phrase 1d')
+    const notes = result.events.filter((event) => event.kind === 'note')
+    expect(notes.map((note) => [note.start.toFraction(), note.pitch.value.valueOf()])).toEqual([
+      ['0', 100],
+      ['1', 200],
+      ['3/2', 50],
+    ])
+    expect(result.duration.toFraction()).toBe('2')
+  })
+
+  it('expands stored repeats only when played and applies the expansion limit', () => {
+    const binding = 'let phrase <- |:@x1000 C :| $ '
+    const options = { expansionLimit: 100 }
+    expect(expandToBeatEvents(parse(binding + 'D'), options).diagnostics).toEqual([])
+    expect(expandToBeatEvents(parse(binding + 'phrase'), options).diagnostics).toMatchObject([
+      { code: 'XP_EXPANSION_LIMIT' },
+    ])
+  })
+
+  it.each([
     ['(let motif <- 1 $ motif)', '(let motif <- 1\nmotif)'],
     ['[let motif <- 1 $ motif]', '[let motif <- 1\nmotif]'],
     ['[let motif <- 1 2 $ motif 3 $]', '[let motif <- 1 2\nmotif 3]'],
