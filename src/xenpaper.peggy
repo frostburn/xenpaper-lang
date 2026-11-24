@@ -32,7 +32,6 @@
     items.length === 1 ? items[0] : node('Sequence', { items }, loc);
 
   const implicitRepeats = new WeakSet();
-  const noImplicitParallelRepeat = new Set();
 
   const prependImplicitRepeatScope = (expression, prefix) => {
     if (implicitRepeats.has(expression)) {
@@ -45,7 +44,7 @@
   const implicitRepeat = (body, result, remainder) => {
     const repeat = node('Repeat', {
       count: null,
-      body,
+      body: [body],
       endings: result.endings,
       terminal: result.terminal,
       incompleteEndings: result.incomplete,
@@ -107,40 +106,22 @@ ParallelExpression
     }
 
 // A repeat end without a matching repeat start repeats from the beginning of
-// its lexical sequence. Keeping this behavior in the scoped productions lets
-// explicit repeat bodies continue to reserve their own `:|` delimiter.
+// its lexical sequence, which stops at a statement or hard boundary. Explicit
+// repeat bodies reserve their own `:|` delimiter and can span statements.
 ScopedParallelExpression
-  = prefix:ImplicitParallelRepeatPrefix
-    remainder:((StatementSeparators / Spacing) item:ScopedParallelExpression { return item; })? {
-      return implicitRepeat(prefix.body, prefix.result, remainder);
+  = body:ParallelExpression result:RepeatEndings !(Spacing ",")
+    remainder:(Spacing item:ScopedParallelExpression { return item; })? {
+      return implicitRepeat(body, result, remainder);
     }
   / first:ScopedSequenceExpression
     rest:(Spacing "," Spacing branch:ScopedSequenceExpression { return branch; })* {
       return parallel([first, ...rest]);
     }
 
-ImplicitParallelRepeatPrefix
-  = start:SourceOffset !{ return noImplicitParallelRepeat.has(start); }
-    first:ParallelExpression
-    rest:(StatementSeparators nextStart:SourceOffset item:ParallelExpression { return { nextStart, item }; })*
-    result:(StatementSeparators? endings:RepeatEndings !(Spacing ",") { return endings; }
-      / &{
-        // Each suffix reaches the same stopping point. Skip rescanning it
-        // when the enclosing statement list goes on to parse that suffix.
-        noImplicitParallelRepeat.add(start);
-        for (const part of rest) noImplicitParallelRepeat.add(part.nextStart);
-        return false;
-      }) {
-      return { body: [first, ...rest.map(part => part.item)], result };
-    }
-
-SourceOffset
-  = "" { return offset(); }
-
 ScopedSequenceExpression
   = body:SequenceExpression result:RepeatEndings
     remainder:(Spacing item:ScopedSequenceExpression { return item; })? {
-      return implicitRepeat([body], result, remainder);
+      return implicitRepeat(body, result, remainder);
     }
   / SequenceExpression
 

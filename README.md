@@ -325,6 +325,10 @@ foo bar
 
 Both scores play `1 2 3`.
 
+An implicit repeat starts after the last `$` or `||` in its scope.
+`C $ D :|` plays `C D D`. An explicit repeat can span a statement boundary,
+so `|: C $ D :|` plays `C D C D`.
+
 Parameters may declare coercions and trailing defaults:
 
 ```text

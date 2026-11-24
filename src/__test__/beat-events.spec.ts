@@ -32,12 +32,13 @@ describe('beat event expansion', () => {
     ['(let motif <- 1 $ motif)', '(let motif <- 1\nmotif)'],
     ['[let motif <- 1 $ motif]', '[let motif <- 1\nmotif]'],
     ['[let motif <- 1 2 $ motif 3 $]', '[let motif <- 1 2\nmotif 3]'],
-    ['C $ D :|', 'C D C D'],
-    ['C :| $ D :|', 'C C D C C D'],
-    ['(C $ D :|)', '(C D :|)'],
-    ['[C $ D :|]', '[C D :|]'],
+    ['C $ D :|', 'C D D'],
+    ['C :| $ D :|', 'C C D D'],
+    ['(C $ D :|)', '(C D D)'],
+    ['[C $ D :|]', '[C D D]'],
     ['C || $ D :|', 'C || D D'],
-  ])('preserves score scope across the delimiter in %s', (actual, expected) => {
+    ['|: C $ D :|', 'C D C D'],
+  ])('evaluates the statement delimiter in %s', (actual, expected) => {
     expect(audibleResult(actual)).toEqual(audibleResult(expected))
   })
 
