@@ -61,6 +61,27 @@ npm run build
 and verifies the npm tarball. Use `npm run test:package` to run just the
 tarball check from a separate consumer.
 
+### Inspecting playback events
+
+From the source checkout, run `npm run build` to pick up runtime changes, then
+pass a score file to the event dumper.
+
+```sh
+node scripts/dump-events.mjs example.xp
+node scripts/dump-events.mjs --json example.xp > example.events.json
+```
+
+The table shows notes and markers in playback order, with each event's first
+source location as `line:column`. Pitched notes use cents relative to the default root
+(C4), and explicitly authored frequencies display in Hz. JSON preserves all
+source spans and pitch automation, and writes exact beat positions, durations,
+and dynamics as fraction strings for comparison across runs. Diagnostics go to
+stderr. Syntax and evaluation errors exit with status 1.
+
+For sample scores, repeat `--sample NAME` for each configured sample. The event
+label identifies the sample, and the pitch reflects the runtime's degree-zero
+placeholder. The dumper is available in the source checkout for development.
+
 ## Shared rhythm grammars
 
 The pitched and sample languages share document sequencing, parallel branches,
