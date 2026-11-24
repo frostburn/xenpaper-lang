@@ -287,9 +287,9 @@ flow still stop evaluation.
 
 ```text
 try {
-  throw("missing " + "theme")
+  throw(<<missing >> + «theme»)
 } catch(message) {
-  if(message @eq "missing theme") { C E G }
+  if(message @eq «missing theme») { C E G }
 }
 ```
 
@@ -529,10 +529,12 @@ Ionian.
 
 ## Strings and records
 
-Double-quoted strings use JSON escapes such as `\n` and `\"`. Use `+` to
-concatenate them, `@eq` to compare them, and `[index]` to select a Unicode
-code point. String indices start at zero, with negative indices counting
-from the end. Attach the double-equave modifier to a pitch as in `"C`.
+Write string literals as `<<text>>` or `«text»`. Both forms accept JSON
+escapes such as `\n`, as well as `\>` and `\»` for literal closing
+characters. Double quotes inside either form can be written directly.
+Use `+` to concatenate strings, `@eq` to compare them, and `[index]` to
+select a Unicode code point. String indices start at zero, with negative
+indices counting from the end.
 
 `record { ... }` stores fields under unique names. Write a bare or quoted key
 in the literal and use a string in brackets to read a field. Strings and
@@ -540,8 +542,8 @@ records can be bound, passed to functions, and returned. The `string` and
 `record` parameter annotations check these types.
 
 ```text
-let preset <- record { title: "opening", phrase: (C . D) }
-if(preset["title"] @eq "opening") { preset["phrase"] }
+let preset <- record { title: «opening», <<lead phrase>>: (C . D) }
+if(preset[<<title>>] @eq «opening») { preset[«lead phrase»] }
 ```
 
 ## Exact values

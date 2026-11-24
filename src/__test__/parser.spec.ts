@@ -835,15 +835,32 @@ describe('Xenpaper surface grammar', () => {
   })
 
   it('keeps hashes in record keys and strings out of the comment list', () => {
-    expect(parse('let data <- record { "#key": "#value" } # real comment').comments).toMatchObject([
-      { raw: '# real comment' },
-    ])
+    expect(
+      parse('let data <- record { <<#key>>: «#value» } # real comment').comments,
+    ).toMatchObject([{ raw: '# real comment' }])
   })
 
-  it('keeps adjacent double-equave modifiers attached to their notes', () => {
-    expect(parse('"C "D').body[0]).toMatchObject({
+  it.each([
+    ['<<>>', ''],
+    ['«»', ''],
+    [String.raw`<<a\n\>><<»"\u266F>>`, 'a\n>><<»"♯'],
+    [String.raw`«a\n\»«>>"\u266F»`, 'a\n»«>>"♯'],
+    [String.raw`<<end\>>>`, 'end>'],
+  ])('parses %s as a string literal', (source, value) => {
+    expect(parse(source).body[0]).toMatchObject({ type: 'StringLiteral', value })
+  })
+
+  it.each(['<<missing»', '«missing>>'])('rejects mismatched string delimiters in %s', (source) => {
+    expect(() => parse(source)).toThrow(/end of input/)
+  })
+
+  it.each(['"C "D', '"C" D'])('reads %s as two double-equave-shifted notes', (source) => {
+    expect(parse(source).body[0]).toMatchObject({
       type: 'Sequence',
-      items: [{ type: 'PitchModifierExpression' }, { type: 'PitchModifierExpression' }],
+      items: [
+        { type: 'PitchModifierExpression', modifier: { kind: 'doubleEquaveUp' } },
+        { type: 'PitchModifierExpression', modifier: { kind: 'doubleEquaveUp' } },
+      ],
     })
   })
 

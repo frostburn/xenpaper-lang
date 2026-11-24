@@ -914,11 +914,16 @@ ThrowStatement
     }
 
 StringLiteral
-  = value:QuotedString ![A-Za-z0-9_α-ωΑ-Ω] { return node('StringLiteral', { value }); }
+  = value:QuotedString { return node('StringLiteral', { value }); }
 
 QuotedString
-  = '"' ('\\' (["\\/bfnrt] / "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]) / [^"\\\x00-\x1F])* '"' {
-      return JSON.parse(text());
+  = "<<" parts:(StringEscape / !">>" @[^\\\x00-\x1F])* ">>" { return parts.join(''); }
+  / "«" parts:(StringEscape / [^»\\\x00-\x1F])* "»" { return parts.join(''); }
+
+StringEscape
+  = "\\" @(">" / "»")
+  / "\\" (["\\/bfnrt] / "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]) {
+      return JSON.parse('"' + text() + '"');
     }
 
 RecordLiteral
