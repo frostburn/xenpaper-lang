@@ -303,6 +303,32 @@ fn transpose(interval, note) { ret note + interval }
 transpose(fifth, C) transpose(fifth, D)
 ```
 
+Use `$` to separate statements on the same line. It takes no time and creates
+no notation. Both `let name <- value` and `name <- value` can take sequences
+and comma-separated parallel branches. For example, `let chord <- C,E,G`
+stores three simultaneous notes. A newline ends a complete value between
+items. A comma at the end of a line continues the value onto the next line,
+and parentheses allow a value to span multiple lines.
+
+```text
+let foo <- 1 $ let bar <- 2 3 $ foo bar
+```
+
+```text
+let foo <- 1
+let bar <- (
+  2
+  3
+)
+foo bar
+```
+
+Both scores play `1 2 3`.
+
+An implicit repeat starts after the last `$` or `||` in its scope.
+`C $ D :|` plays `C D D`. An explicit repeat can span a statement boundary,
+so `|: C $ D :|` plays `C D C D`.
+
 Parameters may declare coercions and trailing defaults:
 
 ```text

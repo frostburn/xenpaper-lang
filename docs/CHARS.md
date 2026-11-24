@@ -22,7 +22,7 @@ context-dependent meanings.
 | U+0021         | !        | Hold every attack until the end of its containing group                                                                                                  |
 | U+0022         | "        | Double-equave-up pitch modifier                                                                                                                          |
 | U+0023         | #        | Sharp accidental; starts a line comment                                                                                                                  |
-| U+0024         | $        | Unsupported                                                                                                                                              |
+| U+0024         | $        | Silent statement delimiter                                                                                                                               |
 | U+0025         | %        | Percent quantity suffix                                                                                                                                  |
 | U+0026         | &        | MOS chroma-up accidental                                                                                                                                 |
 | U+0027         | '        | Equave-up pitch modifier; MOS large-step assignment target                                                                                               |

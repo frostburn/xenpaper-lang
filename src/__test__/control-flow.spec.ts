@@ -58,7 +58,7 @@ describe('comparison expressions', () => {
 
 describe('score control flow', () => {
   it('updates an existing binding without moving the score cursor', () => {
-    expect(score('let note <- C note note <- D note')).toEqual(score('C D'))
+    expect(score('let note <- C $ note $ note <- D $ note')).toEqual(score('C D'))
     expect(expandToBeatEvents(parse('missingName <- C')).diagnostics[0]).toMatchObject({
       code: 'XP_ASSIGNMENT',
     })
@@ -162,7 +162,7 @@ if(cursor @eq 0) { D }
 
   it('evaluates the collection once in the enclosing pitch context', () => {
     expect(score('{12edo} for(note of [1d 2d]) { {19edo} note }')).toEqual(
-      score('{12edo} let melody <- [1d 2d] {19edo} melody[0] melody[1]'),
+      score('{12edo} let melody <- [1d 2d] $ {19edo} melody[0] melody[1]'),
     )
   })
 

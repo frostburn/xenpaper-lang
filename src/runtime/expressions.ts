@@ -85,9 +85,9 @@ let cachedPreludeEnvironment: LexicalEnvironment | undefined
 export function preludeEnvironment(): LexicalEnvironment {
   if (cachedPreludeEnvironment) return cachedPreludeEnvironment
   let environment = EMPTY_LEXICAL_ENVIRONMENT
-  const program = parse(PRELUDE)
-  const sequence = program.body[0]
-  const declarations = sequence?.type === 'Sequence' ? sequence.items : program.body
+  const declarations = parse(PRELUDE).body.flatMap((node) =>
+    node.type === 'Sequence' ? node.items : [node],
+  )
   for (const declaration of declarations) {
     if (declaration.type !== 'VariableDeclaration' && declaration.type !== 'FunctionDeclaration') {
       throw new TypeError('The Xenpaper prelude may only contain declarations.')
@@ -911,8 +911,13 @@ export function evaluateExpression(
           },
         ],
       }
-    if (node.type === 'Group') return containerItems(node, mapping, environment)
-    if (node.type === 'NormalizeToSlot') return containerItems(node, mapping, environment)
+    if (
+      node.type === 'Group' ||
+      node.type === 'NormalizeToSlot' ||
+      node.type === 'Sequence' ||
+      node.type === 'Parallel'
+    )
+      return containerItems(node, mapping, environment)
     if (node.type === 'PitchModifierExpression') {
       const operand = evaluateExpression(node.operand, mapping, environment)
       if (!('value' in operand)) return operand

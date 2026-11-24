@@ -2,25 +2,56 @@ import { describe, expect, it } from 'vitest'
 import { parse } from '../parser.js'
 
 describe('lexical declarations', () => {
-  it.each(['let motif <- [C D]= motif==', 'let motif<-[C D]= motif=='])(
+  it('preserves the score sequence and its binding boundaries', () => {
+    const declarations = [
+      { type: 'VariableDeclaration', name: { name: 'foo' }, value: { degree: '1' } },
+      {
+        type: 'VariableDeclaration',
+        name: { name: 'bar' },
+        value: { type: 'Sequence', items: [{ degree: '2' }, { degree: '3' }] },
+      },
+    ]
+    const references = [{ name: 'foo' }, { name: 'bar' }]
+    expect(parse('let foo <- 1\nlet bar <- 2 3\n\nfoo bar').body).toMatchObject([
+      { type: 'Sequence', items: [...declarations, ...references] },
+    ])
+    expect(parse('let foo <- 1 $ let bar <- 2 3 $ foo bar').body).toMatchObject([
+      ...declarations,
+      { type: 'Sequence', items: references },
+    ])
+  })
+
+  it('continues an unfinished operator expression across a newline', () => {
+    expect(parse('let half <- 1/1 /\n  2/1\nhalf').body).toMatchObject([
+      {
+        type: 'Sequence',
+        items: [
+          { type: 'VariableDeclaration', value: { type: 'BinaryExpression', operator: '/' } },
+          { type: 'Identifier', name: 'half' },
+        ],
+      },
+    ])
+  })
+
+  it.each(['let motif <- [C D]= $ motif==', 'let motif<-[C D]=\nmotif=='])(
     'separates binding arrows from note continuations in %s',
     (source) => {
       const program = parse(source)
-      expect(program.body[0]).toMatchObject({
-        type: 'Sequence',
-        items: [
-          {
-            type: 'VariableDeclaration',
-            name: { name: 'motif' },
-            value: { type: 'PostfixExpression', marks: [{ type: 'DetachedContinue' }] },
-          },
-          {
-            type: 'PostfixExpression',
-            expression: { type: 'Identifier', name: 'motif' },
-            marks: [{ type: 'DetachedContinue' }, { type: 'DetachedContinue' }],
-          },
-        ],
-      })
+      const items = [
+        {
+          type: 'VariableDeclaration',
+          name: { name: 'motif' },
+          value: { type: 'PostfixExpression', marks: [{ type: 'DetachedContinue' }] },
+        },
+        {
+          type: 'PostfixExpression',
+          expression: { type: 'Identifier', name: 'motif' },
+          marks: [{ type: 'DetachedContinue' }, { type: 'DetachedContinue' }],
+        },
+      ]
+      expect(program.body).toMatchObject(
+        source.includes('$') ? items : [{ type: 'Sequence', items }],
+      )
     },
   )
 
@@ -55,13 +86,10 @@ describe('lexical declarations', () => {
   })
 
   it('allows names that extend a pitch-like prefix', () => {
-    expect(parse('let JJv5Gain <- 3/2 JJv5Gain').body[0]).toMatchObject({
-      type: 'Sequence',
-      items: [
-        { type: 'VariableDeclaration', name: { name: 'JJv5Gain' } },
-        { type: 'Identifier', name: 'JJv5Gain' },
-      ],
-    })
+    expect(parse('let JJv5Gain <- 3/2 $ JJv5Gain').body).toMatchObject([
+      { type: 'VariableDeclaration', name: { name: 'JJv5Gain' } },
+      { type: 'Identifier', name: 'JJv5Gain' },
+    ])
     expect(parse('JJv5_counter(3/2)').body[0]).toMatchObject({
       type: 'CallExpression',
       callee: 'JJv5_counter',
@@ -69,7 +97,7 @@ describe('lexical declarations', () => {
     expect(() => parse('J^5sqrt(2)')).toThrow(/Expected/)
   })
 
-  it.each(['0', '2', '-2', '+2', '2d', '2/1', '2 * 3', '^2', '[0 1 2]'])(
+  it.each(['0', '2', '-2', '+2', '2d', '2/1', '2 * 3', '2 3', '^2', '[0 1 2]'])(
     'parses the initializer %s with the score expression rules',
     (source) => {
       const declaration = parse(`let note <- ${source}`).body[0]
@@ -198,9 +226,9 @@ describe('lexical declarations', () => {
 
   it('allows declarations in repeated text', () => {
     for (const source of [
-      '|: let interval <- 3/2 interval :|',
+      '|: let interval <- 3/2 $ interval :|',
       '|: C |@^1 fn transform() { ret 3/2 } transform() ||',
-      'let interval <- 3/2 interval :|',
+      'let interval <- 3/2\ninterval :|',
       'fn transform() { ret 3/2 } transform() :|',
     ])
       expect(() => parse(source)).not.toThrow()
