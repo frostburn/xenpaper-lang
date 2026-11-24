@@ -132,7 +132,13 @@ function convert(item: EvaluatedLiteral, target: 'pitch' | 'ratio'): EvaluatedLi
       ? item
       : { kind: 'scalar', value: Value.ratio(item.value), origins }
   const value = item.kind === 'scalar' ? Value.pitch(item.value) : item.value
-  return { kind: 'pitchOffset', value, justIntonation: true, origins }
+  // A rational ratio has integer prime exponents, even beyond the range of Fraction.
+  const exponents = value.primeExponents()
+  const justIntonation =
+    (item.kind === 'scalar' || item.justIntonation) &&
+    exponents !== undefined &&
+    [...exponents.values()].every((power) => power.d === 1)
+  return { kind: 'pitchOffset', value, origins, ...(justIntonation && { justIntonation }) }
 }
 
 export function evaluateBuiltinCall(
