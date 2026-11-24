@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 
-const usage = 'Usage: node scripts/dump-events.mjs [--json] [--sample NAME]... FILE'
+const usage =
+  'Usage: node scripts/dump-events.mjs [--json] [--sample NAME]... (FILE | --source TEXT)'
 
 function dumpPitch(pitch) {
   const cents = pitch.value.valueOf()
@@ -82,6 +83,7 @@ async function main() {
       help: { type: 'boolean', short: 'h' },
       json: { type: 'boolean' },
       sample: { type: 'string', multiple: true },
+      source: { type: 'string', short: 'e' },
     },
     allowPositionals: true,
   })
@@ -89,23 +91,25 @@ async function main() {
     console.log(usage)
     return
   }
-  if (positionals.length !== 1) {
-    console.error('Expected one score file.\n' + usage)
+  const inline = values.source !== undefined
+  if (positionals.length !== (inline ? 0 : 1)) {
+    console.error('Provide one score file or --source TEXT.\n' + usage)
     process.exitCode = 1
     return
   }
   const [file] = positionals
-  const source = await readFile(file, 'utf8')
+  const source = values.source ?? (await readFile(file, 'utf8'))
+  const sourceName = file ?? '<inline>'
   const { expandToBeatEvents, parse } = await import('../dist/index.js')
 
   const report = (severity, message, location) => {
     const position = location ? `:${location.start.line}:${location.start.column}` : ''
-    console.error(`${file}${position}: ${severity}: ${message}`)
+    console.error(`${sourceName}${position}: ${severity}: ${message}`)
   }
 
   let program
   try {
-    program = parse(source, { grammarSource: file, drumSamples: values.sample })
+    program = parse(source, { grammarSource: sourceName, drumSamples: values.sample })
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error
     report('error', error.message, error.location)

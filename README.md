@@ -71,6 +71,12 @@ node scripts/dump-events.mjs example.xp
 node scripts/dump-events.mjs --json example.xp > example.events.json
 ```
 
+Pass a short score directly with `--source` (`-e`).
+
+```sh
+node scripts/dump-events.mjs --json --source '[C D E] F='
+```
+
 The table shows notes and markers in playback order, with each event's first
 source location as `line:column`. Pitched notes use cents relative to the default root
 (C4), and explicitly authored frequencies display in Hz. JSON preserves all
