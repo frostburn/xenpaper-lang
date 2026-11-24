@@ -414,6 +414,22 @@ tuplet tuplet
 Each use retains the container's sequence or parallel structure and slot timing.
 Its pitches are captured at declaration; playback uses the current timing context.
 
+Bindings can also store fragments with rests, ties, repeats, or directives.
+
+```text
+let phrase <- C . D
+let held <- C -> C
+let refrain <- |: phrase held :|
+refrain
+```
+
+A stored fragment captures its lexical bindings and starting pitch context.
+It runs each time it is played, using the caller's pulse, beat position, and
+prevailing directives. Tuning changes, assignments, and directives within the
+fragment are local to that playback. Repeats expand when played and count
+toward the expansion limit. A fragment can be passed to or returned from a
+function and composed with other scores.
+
 Postfix `=` continues the active note after an ordinary sequence, including a
 parenthesized or stored phrase: `(1 2 3)==` has note durations 1, 1, and 3.
 A trailing rest clears the active note, so `(1 2 .)=` is an error. A normalized

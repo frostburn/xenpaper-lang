@@ -256,6 +256,16 @@ export interface ContainerValue {
   readonly origins: readonly SourceOrigin[]
 }
 
+/** Score syntax with the lexical bindings and pitch context of its capture site. */
+export interface ScoreFragmentValue {
+  readonly kind: 'scoreFragment'
+  readonly expression: Expression
+  readonly environment: LexicalEnvironment
+  readonly pitchContext: PitchContext
+  readonly value: Value
+  readonly origins: readonly SourceOrigin[]
+}
+
 /** Xenpaper's missing value (`niente`). */
 export interface UndefinedValue {
   readonly kind: 'undefined'
@@ -365,6 +375,7 @@ export type EvaluatedLiteral =
   | PitchOffsetValue
   | AbsolutePitchValue
   | ContainerValue
+  | ScoreFragmentValue
   | UndefinedValue
   | LambdaValue
 

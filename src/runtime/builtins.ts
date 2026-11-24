@@ -3,6 +3,7 @@ import type { CoercionAnnotation, Expression } from '../parser.js'
 import { Value } from '../value.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { evaluateLiteral } from './literals.js'
+import { needsScorePlayback } from './score-fragments.js'
 import type { EvaluatedLiteral, LambdaValue, LexicalEnvironment } from './types.js'
 import { extendLexicalEnvironment } from './types.js'
 
@@ -49,6 +50,7 @@ export function evaluateBuiltinArgument(
   environment: LexicalEnvironment,
   evaluate: ExpressionEvaluator,
 ): ExpressionEvaluationResult {
+  if (needsScorePlayback(node)) return evaluate(node, environment)
   if (
     node.type === 'DegreeLiteral' &&
     !node.explicit &&

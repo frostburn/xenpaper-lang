@@ -201,12 +201,16 @@ export function expandRepeats(
 
     countEmission(node)
     const clone: Record<string, unknown> = { ...node, expansionPath: path }
-    // Control flow is evaluated in its lexical and musical context. Expanding
-    // inside a block here could evaluate a repeat in an untaken branch.
+    // Blocks, bindings, and calls may contain scores that are played later.
+    // Expand their repeats only when the evaluator visits the score.
     if (
       node.type === 'IfBlock' ||
       node.type === 'ForBlock' ||
       node.type === 'WhileBlock' ||
+      node.type === 'VariableDeclaration' ||
+      node.type === 'BindingAssignment' ||
+      node.type === 'FunctionDeclaration' ||
+      node.type === 'CallExpression' ||
       (node.type === 'Repeat' && deferRepeats)
     )
       return [clone as ExpandedNode]
