@@ -37,9 +37,11 @@ describe('beat event expansion', () => {
     ['let phrase <- C $ phrase <- D . E $ phrase', 'D . E'],
     ['let phrase <- |: C |¹ D :|² E || $ phrase phrase', 'C D C E C D C E'],
     ['let phrase <- (C D :|) $ phrase', 'C D C D'],
+    ['let phrase <- (C :| D :| $ E :| F :|) $ phrase', 'C C D C C D E E F E E F'],
     ['let phrase <- @2 C . D $ phrase E', '(@2 C . D) E'],
     ['fn play(item) { ret item } $ play((C . D))', 'C . D'],
     ['fn build() { ret |: C D :| } $ let phrase <- build() $ phrase', 'C D C D'],
+    ['fn play() { ret (C :| C :|) + M2 } $ play()', '(C C C C C C) + M2'],
     [
       'fn build(item) { let phrase <- item . C $ item <- E $ ret phrase } $ build(D)',
       'let note <- D $ note . C',
@@ -66,6 +68,28 @@ describe('beat event expansion', () => {
     expect(expandToBeatEvents(parse(binding + 'phrase'), options).diagnostics).toMatchObject([
       { code: 'XP_EXPANSION_LIMIT' },
     ])
+  })
+
+  it('leaves later implicit repeats unexpanded when an earlier section breaks', () => {
+    const program = parse('for(note of [C]) { note break :| |:@x999999 D :| :| } E')
+    const result = expandToBeatEvents(program, { expansionLimit: 100 })
+    expect(result.diagnostics).toEqual([])
+    if (!('score' in result)) throw new Error('Expected a beat-timed score.')
+    expect(result.score.events.filter((event) => event.kind === 'note')).toMatchObject([
+      { pitch: { spelling: { raw: 'C' } } },
+      { pitch: { spelling: { raw: 'E' } } },
+    ])
+  })
+
+  it('plays a saved function body with a separate trailing return', () => {
+    const program = parse('fn choose() { ret D } $ choose()')
+    const declaration = program.body[0]
+    if (declaration?.type !== 'FunctionDeclaration') throw new Error('Expected a function.')
+    const [returned] = declaration.body.statements
+    if (returned?.type !== 'ReturnStatement') throw new Error('Expected a return.')
+    const expected = expandToBeatEvents(program)
+    declaration.body = { ...declaration.body, statements: [], returnStatement: returned }
+    expect(expandToBeatEvents(program)).toEqual(expected)
   })
 
   it.each([

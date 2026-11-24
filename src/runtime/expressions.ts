@@ -432,8 +432,9 @@ function evaluateCallable<Result extends CallDiagnostics>(
     bodyEnvironment = extendLexicalEnvironment(bodyEnvironment, { variables })
     bindings.set(bodyEnvironment, variables)
   }
+  const { statements, returnStatement } = definition.body
   const executed = executeFunctionStatements(
-    definition.body.statements,
+    returnStatement ? [...statements, returnStatement] : statements,
     mapping,
     bodyEnvironment,
     bindings,
@@ -449,10 +450,7 @@ function evaluateCallable<Result extends CallDiagnostics>(
       })),
     }
   }
-  const finalReturn = definition.body.returnStatement
-  const returned =
-    executed.returned ??
-    (finalReturn && evaluateReturn(finalReturn.value, executed.environment, false))
+  const { returned } = executed
   if (!returned) {
     diagnostics.push({
       code: 'XP_MISSING_RETURN',

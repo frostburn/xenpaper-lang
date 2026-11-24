@@ -33,6 +33,7 @@ export function executeFunctionStatements<Result extends { diagnostics: readonly
   evaluateReturn: ReturnEvaluator<Result>,
 ): { environment?: LexicalEnvironment; returned?: Result; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = []
+  const finalStatement = statements.at(-1)
   const abort = Symbol('function statement error')
   const fail = (node: Expression, code: string, message: string): never => {
     diagnostics.push({ code, severity: 'error', message, locations: [node.location] })
@@ -56,7 +57,8 @@ export function executeFunctionStatements<Result extends { diagnostics: readonly
     protectedReturn: boolean,
   ): Completion<Result> => {
     for (const statement of items) {
-      spend(statement)
+      // The caller's terminal return operand has always been outside the statement budget.
+      if (statement.type !== 'ReturnStatement' || statement !== finalStatement) spend(statement)
       switch (statement.type) {
         case 'Sequence': {
           const nested = run(statement.items, scope, inLoop, protectedReturn)
