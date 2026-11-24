@@ -1,9 +1,18 @@
+import { styleText } from 'node:util'
 import { Fraction } from 'xen-dev-utils/fraction'
 
 const formatCents = new Intl.NumberFormat('en', {
   maximumFractionDigits: 2,
   useGrouping: false,
 }).format
+
+const glyphColors = {
+  '●': 'cyanBright',
+  '│': 'cyan',
+  '╱': 'yellow',
+  '╲': 'yellow',
+  '◆': 'magentaBright',
+}
 
 function getGlides(event) {
   const { automation } = event
@@ -102,7 +111,9 @@ function soundingPitch(note, beat) {
   return [cents, '│']
 }
 
-export function renderPianoRoll(score) {
+export function renderPianoRoll(score, { color = true } = {}) {
+  const paint = (glyph) =>
+    color ? styleText(glyphColors[glyph], glyph, { validateStream: false }) : glyph
   const rows = makeRows(score)
   const { step, origin, tickSpacing, width } = pitchAxis(rows)
   const beatWidth = rows.reduce((width, row) => Math.max(width, row.key.length), 4)
@@ -136,7 +147,7 @@ export function renderPianoRoll(score) {
     const barline = markers.some(({ marker }) => marker === 'barline')
     const track = cells
       .map((glyph, column) => {
-        if (glyph !== ' ') return glyph
+        if (glyph !== ' ') return paint(glyph)
         if (barline) return '─'
         return column % tickSpacing ? ' ' : '·'
       })
@@ -153,6 +164,8 @@ export function renderPianoRoll(score) {
     )
   }
   lines.push(' '.repeat(beatWidth + 2) + '└' + '─'.repeat(width) + '┘')
-  lines.push('● attack   │ held   ╱╲ glide   ◆ shared column')
+  lines.push(
+    `${paint('●')} attack   ${paint('│')} held   ${paint('╱')}${paint('╲')} glide   ${paint('◆')} shared column`,
+  )
   return lines.join('\n')
 }

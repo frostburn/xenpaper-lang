@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { renderPianoRoll } from '../../scripts/piano-roll.mjs'
 import { expandToBeatEvents, parse } from '../index.js'
@@ -6,7 +7,7 @@ function pianoRoll(source: string) {
   const result = expandToBeatEvents(parse(source))
   if (!('score' in result)) throw new Error(JSON.stringify(result.diagnostics))
   const rows = new Map<string, string>()
-  for (const line of renderPianoRoll(result.score).split('\n')) {
+  for (const line of renderPianoRoll(result.score, { color: false }).split('\n')) {
     const match = /^\s*(\S+)\s+│(.*)│/.exec(line)
     if (match) rows.set(match[1]!, match[2]!)
   }
@@ -14,6 +15,16 @@ function pianoRoll(source: string) {
 }
 
 describe('development piano roll', () => {
+  it('colors notes by default and preserves layout when color is disabled', () => {
+    const result = expandToBeatEvents(parse('@gliss C G'))
+    if (!('score' in result)) throw new Error(JSON.stringify(result.diagnostics))
+    const colored = renderPianoRoll(result.score)
+    const plain = renderPianoRoll(result.score, { color: false })
+    expect(colored).toContain('\u001B[96m●\u001B[39m')
+    expect(stripVTControlCharacters(plain)).toBe(plain)
+    expect(stripVTControlCharacters(colored)).toBe(plain)
+  })
+
   it('keeps fractional attacks in time order and puts lower pitches on the left', () => {
     const rows = pianoRoll('{31edo} [G E C]')
     const g = rows.get('0')!.indexOf('●')

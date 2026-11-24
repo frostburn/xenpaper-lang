@@ -93,8 +93,10 @@ Add `--piano-roll` to see time flowing downward and pitch rising left to right.
 ```sh
 node scripts/dump-events.mjs --piano-roll example.xp
 node scripts/dump-events.mjs --piano-roll -e '{31edo} [C E G] (C, G)='
+node scripts/dump-events.mjs --piano-roll --no-color example.xp
 ```
 
+The piano roll uses ANSI colors by default. Use `--no-color` for plain Unicode output.
 Rows are labeled with exact beats. The display adds guide rows between events
 and spaces those guides farther apart for longer scores. Each attack is labeled
 with its pitch, so notes sharing a column are still distinguishable. Glides

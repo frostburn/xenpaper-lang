@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 
 const usage =
-  'Usage: node scripts/dump-events.mjs [--json | --piano-roll] [--sample NAME]... (FILE | --source TEXT)'
+  'Usage: node scripts/dump-events.mjs [--json | --piano-roll [--no-color]] [--sample NAME]... (FILE | --source TEXT)'
 
 function dumpPitch(pitch) {
   const cents = pitch.value.valueOf()
@@ -83,6 +83,7 @@ async function main() {
       help: { type: 'boolean', short: 'h' },
       json: { type: 'boolean' },
       'piano-roll': { type: 'boolean' },
+      'no-color': { type: 'boolean' },
       sample: { type: 'string', multiple: true },
       source: { type: 'string', short: 'e' },
     },
@@ -135,7 +136,7 @@ async function main() {
   const { score } = result
   if (values['piano-roll']) {
     const { renderPianoRoll } = await import('./piano-roll.mjs')
-    console.log(renderPianoRoll(score))
+    console.log(renderPianoRoll(score, { color: !values['no-color'] }))
     return
   }
   const duration = score.duration.toFraction()
