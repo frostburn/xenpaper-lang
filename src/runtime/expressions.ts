@@ -10,13 +10,19 @@ import { needsScorePlayback } from './score-fragments.js'
 import { equaveShift as modifierEquaveShift } from './pitch-modifiers.js'
 import type {
   EvaluatedLiteral,
+  CallableValue,
   LexicalEnvironment,
   PitchOffsetValue,
   ScalarValue,
   SourceOrigin,
 } from './types.js'
 import type { PitchContext, PrimeMapping } from './types.js'
-import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment } from './types.js'
+import {
+  callableArity,
+  EMPTY_LEXICAL_ENVIRONMENT,
+  extendLexicalEnvironment,
+  isCallableValue,
+} from './types.js'
 import {
   createPitchContext,
   DEFAULT_PITCH_CONTEXT,
@@ -271,14 +277,9 @@ export function prepareFunctionCall(
   mapping: PrimeMapping | PitchContext = DEFAULT_PITCH_CONTEXT,
   environment: LexicalEnvironment = preludeEnvironment(),
 ): FunctionCallPreparation | undefined {
-  let definition
-  let variable = false
-  for (let scope: LexicalEnvironment | undefined = environment; scope; scope = scope.parent) {
-    if (!definition) definition = scope.functions.get(node.callee)
-    if (scope.variables.has(node.callee)) variable = true
-    if (definition || variable) break
-  }
-  if (variable && !definition)
+  const value = lookupBinding(node.callee, environment)
+  if (!value) return undefined
+  if (!isCallableValue(value))
     return {
       diagnostics: [
         {
@@ -289,40 +290,66 @@ export function prepareFunctionCall(
         },
       ],
     }
-  if (!definition) return undefined
-  if (environment.calls.has(definition))
+  return prepareCallable(value, node, node.arguments, mapping, environment)
+}
+
+function lookupBinding(
+  name: string,
+  environment: LexicalEnvironment,
+): EvaluatedLiteral | undefined {
+  for (let scope: LexicalEnvironment | undefined = environment; scope; scope = scope.parent) {
+    const definition = scope.functions.get(name)
+    if (definition)
+      return {
+        kind: 'function',
+        definition,
+        value: new Value(0),
+        origins: [{ location: definition.declaration.name.location, role: 'structural' }],
+      }
+    const value = scope.variables.get(name)
+    if (value) return value
+  }
+}
+
+function prepareCallable(
+  callable: CallableValue,
+  node: Pick<Extract<Expression, { type: 'CallExpression' }>, 'callee' | 'location'>,
+  args: readonly (Expression | EvaluatedLiteral)[],
+  mapping: PrimeMapping | PitchContext,
+  environment: LexicalEnvironment,
+): FunctionCallPreparation {
+  const identity = callable.kind === 'function' ? callable.definition : callable.identity
+  const declaration = callable.kind === 'function' ? callable.definition.declaration : undefined
+  if (environment.calls.has(identity))
     return {
       diagnostics: [
         {
           code: 'XP_RECURSION',
           severity: 'error',
           message: `Recursive call to ${node.callee}() is prohibited.`,
-          locations: [node.location, definition.declaration.name.location],
+          locations: [node.location, ...(declaration ? [declaration.name.location] : [])],
         },
       ],
     }
-  const minimumArguments = definition.parameters.filter(
-    (parameter) => !parameter.defaultValue,
-  ).length
-  if (
-    node.arguments.length < minimumArguments ||
-    node.arguments.length > definition.parameters.length
-  )
+  const [minimumArguments, maximumArguments] = callableArity(callable)
+  if (args.length < minimumArguments || args.length > maximumArguments)
     return {
       diagnostics: [
         {
           code: 'XP_ARITY',
           severity: 'error',
           message:
-            minimumArguments === definition.parameters.length
-              ? `${node.callee}() expects ${definition.parameters.length} argument${definition.parameters.length === 1 ? '' : 's'}, but received ${node.arguments.length}.`
-              : `${node.callee}() expects ${minimumArguments} to ${definition.parameters.length} arguments, but received ${node.arguments.length}.`,
-          locations: [node.location, definition.declaration.location],
+            minimumArguments === maximumArguments
+              ? `${node.callee}() expects ${maximumArguments} argument${maximumArguments === 1 ? '' : 's'}, but received ${args.length}.`
+              : `${node.callee}() expects ${minimumArguments} to ${maximumArguments} arguments, but received ${args.length}.`,
+          locations: [node.location, ...(declaration ? [declaration.location] : [])],
         },
       ],
     }
-  const supplied = node.arguments.map((argument, index) => {
-    const coercion = definition.parameters[index]?.coercion
+  const supplied: ExpressionEvaluationResult[] = args.map((argument, index) => {
+    if (!('type' in argument)) return { value: argument, diagnostics: [] }
+    const coercion =
+      callable.kind === 'function' ? callable.definition.parameters[index]?.coercion : undefined
     if (coercion?.name === 'container')
       return containerItems(argument, mapping, environment, coercion)
     if (
@@ -340,11 +367,26 @@ export function prepareFunctionCall(
   })
   const diagnostics = supplied.flatMap((result) => result.diagnostics)
   if (!supplied.every((result) => 'value' in result)) return { diagnostics }
-  const calls = new Set(environment.calls).add(definition)
+  const calls = new Set(environment.calls).add(identity)
   const functionBudget = environment.functionBudget ?? { remaining: 100_000 }
+  if (callable.kind === 'lambda') {
+    const variables = new Map(
+      callable.parameters.map((name, index) => [name, supplied[index]!.value]),
+    )
+    return {
+      expression: callable.body,
+      environment: extendLexicalEnvironment(callable.environment, {
+        variables,
+        calls,
+        functionBudget,
+      }),
+      diagnostics,
+    }
+  }
+  const { definition } = callable
   const bindings: FunctionBindings = new WeakMap()
   let bodyEnvironment = extendLexicalEnvironment(definition.environment, {
-    functions: new Map([[node.callee, definition]]),
+    functions: new Map([[definition.declaration.name.name, definition]]),
     calls,
     functionBudget,
   })
@@ -363,11 +405,19 @@ export function prepareFunctionCall(
       value = coerceParameter(evaluated.value, parameter.coercion)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Parameter coercion failed.'
+      const argument = args[index]
       diagnostics.push({
         code: 'XP_PARAMETER_COERCION',
         severity: 'error',
         message: `${parameter.name.name}: ${message}`,
-        locations: [node.arguments[index]?.location ?? parameter.location, parameter.location],
+        locations: [
+          argument === undefined
+            ? parameter.location
+            : 'type' in argument
+              ? argument.location
+              : node.location,
+          parameter.location,
+        ],
       })
       return { diagnostics }
     }
@@ -683,7 +733,8 @@ function compareOperands(
 
 export function isTruthy(value: EvaluatedLiteral): boolean {
   if (value.kind === 'undefined') return false
-  if (value.kind === 'absolutePitch' || value.kind === 'scoreFragment') return true
+  if (value.kind === 'absolutePitch' || value.kind === 'scoreFragment' || isCallableValue(value))
+    return true
   if (value.kind === 'container') return value.values.length > 0
   return !value.value.isZero()
 }
@@ -734,8 +785,8 @@ function binary(
   if (
     left.kind === 'undefined' ||
     right.kind === 'undefined' ||
-    left.kind === 'lambda' ||
-    right.kind === 'lambda' ||
+    isCallableValue(left) ||
+    isCallableValue(right) ||
     left.kind === 'scoreFragment' ||
     right.kind === 'scoreFragment'
   )
@@ -930,14 +981,12 @@ export function evaluateExpression(
     if (node.type === 'MosIntervalLiteral')
       return { value: evaluateMosIntervalLiteral(node, mapping), diagnostics: [] }
     if (node.type === 'Identifier') {
-      for (let scope: LexicalEnvironment | undefined = environment; scope; scope = scope.parent) {
-        const value = scope.variables.get(node.name)
-        if (value)
-          return {
-            value: annotateReference(value, { location: node.location, role: 'literal' }, mapping),
-            diagnostics: [],
-          }
-      }
+      const value = lookupBinding(node.name, environment)
+      if (value)
+        return {
+          value: annotateReference(value, { location: node.location, role: 'literal' }, mapping),
+          diagnostics: [],
+        }
     }
     if (node.type === 'Identifier' && node.name === 'niente')
       return {
@@ -965,6 +1014,7 @@ export function evaluateExpression(
       return {
         value: {
           kind: 'lambda',
+          identity: Symbol(),
           parameters,
           body: node.body,
           environment,
@@ -999,7 +1049,7 @@ export function evaluateExpression(
       if (
         operand.value.kind === 'container' ||
         operand.value.kind === 'undefined' ||
-        operand.value.kind === 'lambda' ||
+        isCallableValue(operand.value) ||
         operand.value.kind === 'scoreFragment'
       )
         throw new TypeError('Pitch modifiers require a numeric operand.')
@@ -1108,7 +1158,7 @@ export function evaluateExpression(
       if (
         operand.value.kind === 'container' ||
         operand.value.kind === 'undefined' ||
-        operand.value.kind === 'lambda' ||
+        isCallableValue(operand.value) ||
         operand.value.kind === 'scoreFragment'
       )
         throw new TypeError('Unary operators require a numeric operand.')
@@ -1225,8 +1275,7 @@ export function evaluateExpression(
       return { ...branch, diagnostics: [...condition.diagnostics, ...branch.diagnostics] }
     }
     if (node.type === 'CallExpression') {
-      const prepared = prepareFunctionCall(node, mapping, environment)
-      if (prepared) {
+      const evaluatePrepared = (prepared: FunctionCallPreparation): ExpressionEvaluationResult => {
         if (!('expression' in prepared)) return prepared
         const body = evaluateExpression(prepared.expression, mapping, prepared.environment)
         return {
@@ -1234,8 +1283,28 @@ export function evaluateExpression(
           diagnostics: [...prepared.diagnostics, ...body.diagnostics],
         }
       }
-      return evaluateBuiltinCall(node, environment, (expression, scope = environment) =>
-        evaluateExpression(expression, mapping, scope),
+      const prepared = prepareFunctionCall(node, mapping, environment)
+      if (prepared) return evaluatePrepared(prepared)
+      return evaluateBuiltinCall(
+        node,
+        environment,
+        (expression, scope = environment) => evaluateExpression(expression, mapping, scope),
+        (callback, args) =>
+          evaluatePrepared(
+            prepareCallable(
+              callback,
+              {
+                callee:
+                  callback.kind === 'function'
+                    ? callback.definition.declaration.name.name
+                    : 'lambda',
+                location: node.location,
+              },
+              args,
+              mapping,
+              environment,
+            ),
+          ),
       )
     }
     throw new TypeError(`${node.type} is not an arithmetic expression.`)

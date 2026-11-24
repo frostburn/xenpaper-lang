@@ -461,6 +461,20 @@ Every evaluation starts with a prelude written in Xenpaper itself. It currently
 declares `pi` and defines helpers such as `sqrt`, `cps`, and `eulerGenus`.
 Ordinary lexical shadowing can replace these names in a narrower scope.
 
+Named `fn` declarations and lambdas can be stored in variables, passed as
+arguments, and returned. Call a function-valued binding with `name(...)`.
+Array helpers accept callable values with the appropriate number of arguments,
+including any optional parameters on a named function.
+
+```text
+let raise <- (note) => note + 3/2
+raise(C)
+
+fn transpose(note, interval: ratio <- 3/2) { ret note + interval }
+let shift <- transpose
+arrayMap(shift, [C D E])
+```
+
 `ret` has lower precedence than score sequencing and parallel composition, so a
 function may return an entire musical fragment:
 
