@@ -9,6 +9,13 @@ export interface Diagnostic {
   readonly locations: readonly LocationRange[]
 }
 
+/** Carry diagnostics through evaluation paths that signal failures with exceptions. */
+export class EvaluationError extends Error {
+  constructor(readonly diagnostics: readonly Diagnostic[]) {
+    super(diagnostics[0]?.message)
+  }
+}
+
 /** Structural control-flow failures must still terminate evaluation. */
 export function catchableDiagnostic(diagnostics: readonly Diagnostic[]): Diagnostic | undefined {
   const errors = diagnostics.filter(({ severity }) => severity === 'error')

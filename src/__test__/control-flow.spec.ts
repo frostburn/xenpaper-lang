@@ -218,6 +218,20 @@ describe('score control flow', () => {
       'D',
     ],
     ['fn choose() { try { ret C } catch { ret D } } $ choose()', 'C'],
+    ['fn choose() { try { ret missingName } catch { ret C } } $ choose()', 'C'],
+    [
+      'fn choose(note) { try { note <- E $ ret (F . missingName) } catch { ret note . D } } $ choose(C)',
+      'C . D',
+    ],
+    [
+      'fn choose() { try { try { ret missingName } catch { ret 1 / 0 } } catch { ret C } } $ let note <- choose() $ note',
+      'C',
+    ],
+    ['fn choose() { try { ret missingName } catch { ret (3/2 2/1) } } $ {choose()} 1 2', '3/2 2/1'],
+    [
+      'fn choose() { try { ret 1::missingName } catch(message) { if(message @eq «Undefined name missingName.») { ret (3/2 2/1) } } } $ {choose()} 1 2',
+      '3/2 2/1',
+    ],
     ['for(item of [C D]) { try { item break } catch { E } } F', 'C F'],
   ])('evaluates data and control flow in %s', (source, expected) => {
     expect(score(source)).toEqual(score(expected))
@@ -230,6 +244,19 @@ describe('score control flow', () => {
     ['try { ret C } catch { D }', 'XP_RETURN_SCOPE'],
     ['fn choose() { if(false) { ret C } } $ choose()', 'XP_MISSING_RETURN'],
     ['try { while(true) {} } catch { C }', 'XP_EXPANSION_LIMIT'],
+    ['fn choose() { try { ret choose() } catch { ret C } } $ choose()', 'XP_RECURSION'],
+    [
+      'fn choose() { try { ret 1::choose() } catch { ret (3/2 2/1) } } $ {choose()} 1 2',
+      'XP_RECURSION',
+    ],
+    [
+      'fn choose() { try { ret 1::choose() } catch { ret (3/2 2/1) } } $ try { {choose()} 1 2 } catch { C }',
+      'XP_RECURSION',
+    ],
+    [
+      'fn choose() { try { ret 1::10002 } catch { ret (3/2 2/1) } } $ try { {choose()} 1 2 } catch { C }',
+      'XP_EXPANSION_LIMIT',
+    ],
   ])('keeps unhandled diagnostics for %s', (source, code) => {
     expect(expandToBeatEvents(parse(source), { expansionLimit: 100 }).diagnostics).toMatchObject([
       { code },

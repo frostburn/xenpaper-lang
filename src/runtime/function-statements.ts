@@ -1,4 +1,4 @@
-import type { Expression, ReturnStatement } from '../parser.js'
+import type { Expression } from '../parser.js'
 import type { Diagnostic } from '../diagnostics.js'
 import { catchableDiagnostic } from '../diagnostics.js'
 import { Value } from '../value.js'
@@ -15,16 +15,23 @@ import type { EvaluatedLiteral, LexicalEnvironment, PitchContext, PrimeMapping }
 export type FunctionBindings = WeakMap<LexicalEnvironment, Map<string, EvaluatedLiteral>>
 
 type Jump = 'break' | 'continue'
-type Completion = { scope: LexicalEnvironment; jump?: Jump; returned?: ReturnStatement }
+type Completion<Result> = { scope: LexicalEnvironment; jump?: Jump; returned?: Result }
 
-/** Execute value-producing statements before the function's final score or value expression. */
-export function executeFunctionStatements(
+export type ReturnEvaluator<Result> = (
+  expression: Expression,
+  scope: LexicalEnvironment,
+  protectedReturn: boolean,
+) => Result
+
+/** Execute function statements, including return operands reached inside a handler's trial. */
+export function executeFunctionStatements<Result extends { diagnostics: readonly Diagnostic[] }>(
   statements: readonly Expression[],
   mapping: PrimeMapping | PitchContext,
   environment: LexicalEnvironment,
   bindings: FunctionBindings,
   budget: { remaining: number },
-): { environment?: LexicalEnvironment; returned?: ReturnStatement; diagnostics: Diagnostic[] } {
+  evaluateReturn: ReturnEvaluator<Result>,
+): { environment?: LexicalEnvironment; returned?: Result; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = []
   const abort = Symbol('function statement error')
   const fail = (node: Expression, code: string, message: string): never => {
@@ -46,12 +53,13 @@ export function executeFunctionStatements(
     items: readonly Expression[],
     scope: LexicalEnvironment,
     inLoop: boolean,
-  ): Completion => {
+    protectedReturn: boolean,
+  ): Completion<Result> => {
     for (const statement of items) {
       spend(statement)
       switch (statement.type) {
         case 'Sequence': {
-          const nested = run(statement.items, scope, inLoop)
+          const nested = run(statement.items, scope, inLoop, protectedReturn)
           if (nested.jump || nested.returned) return nested
           scope = nested.scope
           break
@@ -87,8 +95,17 @@ export function executeFunctionStatements(
         case 'ThrowStatement':
           diagnostics.push(...evaluateThrow(statement, mapping, scope))
           throw abort
-        case 'ReturnStatement':
-          return { scope, returned: statement }
+        case 'ReturnStatement': {
+          const returned = evaluateReturn(statement.value, scope, protectedReturn)
+          if (
+            protectedReturn &&
+            returned.diagnostics.some(({ severity }) => severity === 'error')
+          ) {
+            diagnostics.push(...returned.diagnostics)
+            throw abort
+          }
+          return { scope, returned }
+        }
         case 'LoopJump':
           if (!inLoop)
             fail(
@@ -102,7 +119,7 @@ export function executeFunctionStatements(
             ? statement.consequent
             : statement.alternate
           if (branch) {
-            const branchResult = run([branch], scope, inLoop)
+            const branchResult = run([branch], scope, inLoop, protectedReturn)
             if (branchResult.returned) return branchResult
             if (branchResult.jump) return { scope, jump: branchResult.jump }
           }
@@ -116,7 +133,7 @@ export function executeFunctionStatements(
             if (variables) snapshots.set(variables, new Map(variables))
           }
           try {
-            const trial = run(statement.body.items, scope, inLoop)
+            const trial = run(statement.body.items, scope, inLoop, true)
             if (trial.returned) return trial
             if (trial.jump) return { scope, jump: trial.jump }
           } catch (error) {
@@ -138,7 +155,7 @@ export function executeFunctionStatements(
               handlerScope = extendLexicalEnvironment(scope, { variables })
               bindings.set(handlerScope, variables)
             }
-            const handler = run(statement.handler.items, handlerScope, inLoop)
+            const handler = run(statement.handler.items, handlerScope, inLoop, protectedReturn)
             if (handler.returned) return handler
             if (handler.jump) return { scope, jump: handler.jump }
           }
@@ -164,7 +181,7 @@ export function executeFunctionStatements(
               const variables = new Map([[statement.name.name, value]])
               const inner = extendLexicalEnvironment(scope, { variables })
               bindings.set(inner, variables)
-              const iteration = run(statement.body.items, inner, true)
+              const iteration = run(statement.body.items, inner, true, protectedReturn)
               if (iteration.returned) return iteration
               if (iteration.jump === 'break') {
                 broke = true
@@ -176,7 +193,7 @@ export function executeFunctionStatements(
             for (;;) {
               spend(statement)
               if (!isTruthy(evaluate(statement.condition, inner))) break
-              const iteration = run(statement.body.items, inner, true)
+              const iteration = run(statement.body.items, inner, true, protectedReturn)
               if (iteration.returned) return iteration
               inner = iteration.scope
               if (iteration.jump === 'break') {
@@ -186,7 +203,7 @@ export function executeFunctionStatements(
             }
           }
           if (!broke && statement.alternate) {
-            const alternate = run(statement.alternate.items, scope, inLoop)
+            const alternate = run(statement.alternate.items, scope, inLoop, protectedReturn)
             if (alternate.returned) return alternate
             if (alternate.jump) return { scope, jump: alternate.jump }
           }
@@ -204,7 +221,7 @@ export function executeFunctionStatements(
   }
 
   try {
-    const completed = run(statements, environment, false)
+    const completed = run(statements, environment, false, false)
     return { environment: completed.scope, returned: completed.returned, diagnostics }
   } catch (error) {
     if (error !== abort) throw error

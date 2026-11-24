@@ -12,9 +12,14 @@ import type {
   SignatureDeclaration,
 } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
+import { EvaluationError } from '../diagnostics.js'
 import { Value } from '../value.js'
 import { applyFjsInflections, fjsPrimeComma, groupFjsInflections } from './fjs.js'
-import { evaluateExpression, prepareFunctionCall } from './expressions.js'
+import {
+  evaluateExpression,
+  evaluateFunctionCall,
+  type ExpressionEvaluationResult,
+} from './expressions.js'
 import type {
   AbsolutePitchValue,
   IntervalSpelling,
@@ -346,28 +351,65 @@ export function applyPitchContextChange(
       continue
     }
     if (statement.type === 'ContextDegreeMapping') {
+      type DegreeExpression = {
+        expression: Expression
+        environment?: LexicalEnvironment
+        evaluated?: ExpressionEvaluationResult
+      }
       type ExpandedDegrees = {
-        values: { expression: Expression; environment?: LexicalEnvironment }[]
+        values: DegreeExpression[]
         iterable: boolean
       }
+      const evaluateDegree = ({ expression, environment, evaluated }: DegreeExpression) =>
+        evaluated ?? evaluateExpression(expression, context, environment)
       const expandDegreeExpression = (
         expression: Expression,
         expressionEnvironment = environment,
       ): ExpandedDegrees => {
         if (expression.type === 'CallExpression') {
-          const prepared = prepareFunctionCall(expression, context, expressionEnvironment)
+          const returned = evaluateFunctionCall(
+            expression,
+            context,
+            expressionEnvironment,
+            (operand, scope, protectedReturn) => {
+              try {
+                const expanded = expandDegreeExpression(operand, scope)
+                if (!protectedReturn) return { ...expanded, diagnostics: [] }
+                const values = expanded.values.map((value) => ({
+                  ...value,
+                  evaluated: evaluateDegree(value),
+                }))
+                return {
+                  ...expanded,
+                  values,
+                  diagnostics: values.flatMap(({ evaluated }) => evaluated.diagnostics),
+                }
+              } catch (error) {
+                if (error instanceof EvaluationError) return { diagnostics: error.diagnostics }
+                if (protectedReturn && error instanceof TypeError)
+                  return {
+                    diagnostics: [
+                      {
+                        code: 'XP_CONTEXT',
+                        severity: 'error',
+                        message: error.message,
+                        locations: [operand.location],
+                      },
+                    ],
+                  }
+                throw error
+              }
+            },
+          )
           // Calls without user definitions may still be scalar built-ins such as pitch() and
           // ratio(); leave those intact for ordinary expression evaluation below.
-          if (!prepared)
+          if (!returned)
             return {
               values: [{ expression, environment: expressionEnvironment }],
               iterable: false,
             }
-          if (!('expression' in prepared))
-            throw new TypeError(
-              prepared.diagnostics[0]?.message ?? 'The scale constructor could not be evaluated.',
-            )
-          return expandDegreeExpression(prepared.expression, prepared.environment)
+          if (!('values' in returned)) throw new EvaluationError(returned.diagnostics)
+          return returned
         }
         if (expression.type === 'Group' || expression.type === 'NormalizeToSlot') {
           if (!expression.expression) return { values: [], iterable: true }
@@ -425,10 +467,15 @@ export function applyPitchContextChange(
         const enumerated = expression
         let enumerands = enumerated.enumerands
         if (!enumerands) {
-          const endpoints = [enumerated.first, enumerated.rangeEnd!].map((endpoint) => {
-            const evaluated = evaluateExpression(endpoint, context, expressionEnvironment)
-            if (!('value' in evaluated) || evaluated.value.kind !== 'scalar') return undefined
-            const exact = evaluated.value.value.exactRational()
+          const evaluated = [enumerated.first, enumerated.rangeEnd!].map((endpoint) =>
+            evaluateExpression(endpoint, context, expressionEnvironment),
+          )
+          const diagnostics = evaluated.flatMap((result) => result.diagnostics)
+          if (diagnostics.some(({ severity }) => severity === 'error'))
+            throw new EvaluationError(diagnostics)
+          const endpoints = evaluated.map((result) => {
+            if (!('value' in result) || result.value.kind !== 'scalar') return undefined
+            const exact = result.value.value.exactRational()
             return exact?.d === 1 ? BigInt(exact.s * exact.n) : undefined
           })
           if (endpoints.some((endpoint) => endpoint === undefined))
@@ -436,7 +483,14 @@ export function applyPitchContextChange(
           const [start, end] = endpoints as [bigint, bigint]
           const distance = start <= end ? end - start : start - end
           if (distance > 10_000n)
-            throw new RangeError('Enumerated scale exceeds the 10000-member expansion limit.')
+            throw new EvaluationError([
+              {
+                code: 'XP_EXPANSION_LIMIT',
+                severity: 'error',
+                message: 'Enumerated scale exceeds the 10000-member expansion limit.',
+                locations: [enumerated.location],
+              },
+            ])
           const step = start <= end ? 1n : -1n
           enumerands = []
           for (let value = start; ; value += step) {
@@ -466,8 +520,8 @@ export function applyPitchContextChange(
         }
       }
       const values = statement.values.flatMap((value) => expandDegreeExpression(value).values)
-      const evaluatedDegrees = values.flatMap(({ expression, environment: valueEnvironment }) => {
-        const evaluated = evaluateExpression(expression, context, valueEnvironment)
+      const evaluatedDegrees = values.flatMap((value) => {
+        const evaluated = evaluateDegree(value)
         if (!('value' in evaluated))
           throw new TypeError('Degree assignments require pitch intervals.')
         return evaluated.value.kind === 'container' ? evaluated.value.values : [evaluated.value]

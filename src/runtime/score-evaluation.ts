@@ -1,7 +1,7 @@
 import { Fraction } from 'xen-dev-utils/fraction'
 import type { Expression, Node } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
-import { catchableDiagnostic } from '../diagnostics.js'
+import { catchableDiagnostic, EvaluationError } from '../diagnostics.js'
 import { Value } from '../value.js'
 import {
   evaluateDeclaration,
@@ -10,7 +10,7 @@ import {
   isComparison,
   isTruthy,
   preludeEnvironment,
-  prepareFunctionCall,
+  evaluateFunctionCall,
   stringValue,
 } from './expressions.js'
 import { expandRepeats } from './repeat-expansion.js'
@@ -54,12 +54,6 @@ interface PlaybackAttackShape extends AttackShape {
   readonly dynamic: DynamicMark
   readonly velocity: Fraction
   readonly velocityExplicit?: boolean
-}
-
-class EvaluationError extends Error {
-  constructor(readonly diagnostics: readonly Diagnostic[]) {
-    super(diagnostics[0]?.message)
-  }
 }
 
 interface ContextResolver {
@@ -1622,25 +1616,28 @@ export function evaluateScoreSemantics(
       })
     }
     if (current.type === 'CallExpression') {
-      const prepared = prepareFunctionCall(current, context, environment)
-      if (prepared) {
-        if (!('expression' in prepared)) return prepared
-        const returned = changeVisitor(visitor, (context) => ({
-          ...context,
-          lexicalEnvironment: prepared.environment,
-        })).visit(prepared.expression, {
-          loop: undefined,
-          subdivisionContext: visitor.scope.resolve,
-        })
-        const diagnostics = [...prepared.diagnostics, ...returned.diagnostics]
-        if (!hasShape(returned)) return { diagnostics }
+      const returned = evaluateFunctionCall(
+        current,
+        context,
+        environment,
+        (expression, scope, protectedReturn) =>
+          changeVisitor(visitor, (context) => ({
+            ...context,
+            lexicalEnvironment: scope,
+          })).visit(expression, {
+            loop: undefined,
+            stopOnError: protectedReturn || visitor.scope.stopOnError,
+            subdivisionContext: visitor.scope.resolve,
+          }),
+      )
+      if (returned) {
+        if (!hasShape(returned)) return returned
         return {
           ...returned,
           shape: {
             ...annotateScoreUse(returned.shape, origin(current)),
             isolatedDirectiveScope: true,
           },
-          diagnostics,
         }
       }
     }
@@ -1968,14 +1965,17 @@ export function evaluateScoreSemantics(
             })
           } catch (error) {
             results.push({
-              diagnostics: [
-                {
-                  code: 'XP_CONTEXT',
-                  severity: 'error',
-                  message: error instanceof Error ? error.message : 'Invalid pitch context.',
-                  locations: [item.location],
-                },
-              ],
+              diagnostics:
+                error instanceof EvaluationError
+                  ? error.diagnostics
+                  : [
+                      {
+                        code: 'XP_CONTEXT',
+                        severity: 'error',
+                        message: error instanceof Error ? error.message : 'Invalid pitch context.',
+                        locations: [item.location],
+                      },
+                    ],
             })
           }
           continue
@@ -2635,7 +2635,8 @@ export function evaluateScoreSemantics(
       try {
         const changed = applyPitchContextChange(current, context, environment)
         return { shape: contextShape(current, changed, context), diagnostics: [] }
-      } catch {
+      } catch (error) {
+        if (error instanceof EvaluationError) return { diagnostics: error.diagnostics }
         return { shape: contextAnnotation(current), diagnostics: [] }
       }
     }
