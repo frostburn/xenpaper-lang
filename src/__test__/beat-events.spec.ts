@@ -461,6 +461,19 @@ describe('beat event expansion', () => {
     expect(notes[3]!.origins.map((origin) => origin.role)).toEqual(['literal', 'duration'])
   })
 
+  it('can continue an attack whose entire original duration was removed', () => {
+    const result = score('(C?) = D')
+    expect(
+      result.events.map((note) => [
+        note.start.toFraction(),
+        note.kind === 'note' && note.duration.toFraction(),
+      ]),
+    ).toEqual([
+      ['0', '1'],
+      ['1', '1'],
+    ])
+  })
+
   it('rejects a continuation without an active note', () => {
     const result = expandToBeatEvents(parse('= C'))
 

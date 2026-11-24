@@ -33,6 +33,18 @@ function notes(source: string, initialization: ScoreInitialization, offset?: Fra
 }
 
 describe('global grid context', () => {
+  it('applies groove changes from layered timelines at their absolute beats', () => {
+    const parent = initialize('. @groove([C= C]) ...')
+    const layer = evaluateInitialization(parse('@groove([C C=]) ....'), {
+      initialization: parent,
+      allowDuration: true,
+    })
+    expect(layer.diagnostics).toEqual([])
+    expect(
+      notes('[C D] [E F]', layer.initialization!).map(({ start }) => start.toFraction()),
+    ).toEqual(['0', '1/3', '1', '5/3'])
+  })
+
   it('keeps the global groove on the absolute grid around a function-local groove', () => {
     const initialization = initialize('@groove([C= C]) ..')
     const offset = new Fraction(1, 2)

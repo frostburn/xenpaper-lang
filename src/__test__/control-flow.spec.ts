@@ -218,6 +218,10 @@ describe('score control flow', () => {
       'D',
     ],
     ['fn choose() { try { ret C } catch { ret D } } $ choose()', 'C'],
+    [
+      'fn choose(note) { try { try { note <- D } catch { ret F } $ ret missingName } catch { ret note } } $ choose(C)',
+      'C',
+    ],
     ['fn choose() { try { ret missingName } catch { ret C } } $ choose()', 'C'],
     [
       'fn choose(note) { try { note <- E $ ret (F . missingName) } catch { ret note . D } } $ choose(C)',
