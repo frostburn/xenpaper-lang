@@ -97,7 +97,7 @@ describe('score-shape timing', () => {
     expect(notes.map((note) => note.pitch.value.valueOf())).toEqual(cents)
   })
 
-  it('captures container pitches once and reuses them under the current timing', () => {
+  it('resolves stored container degrees under the current tuning and timing', () => {
     const score = shape('let tuplet <- [0 1 2] $ {24edo} @2 tuplet tuplet[1]')
     const notes: Extract<ScoreShape, { kind: 'attack' }>[] = []
     const collect = (current: ScoreShape) => {
@@ -106,7 +106,7 @@ describe('score-shape timing', () => {
       else if (current.kind === 'parallel') current.branches.forEach(collect)
     }
     collect(score)
-    expect(notes.map((note) => note.pitch.value.valueOf())).toEqual([0, 100, 200, 100])
+    expect(notes.map((note) => note.pitch.value.valueOf())).toEqual([0, 50, 100, 50])
     expect(notes.slice(0, 3).every((note) => note.duration.equals(new Fraction(1, 6)))).toBe(true)
   })
 

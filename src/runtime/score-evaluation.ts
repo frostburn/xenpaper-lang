@@ -2576,7 +2576,6 @@ export function evaluateScoreSemantics(
       const fragment = value.value
       const scope = changeVisitor(visitor, (context) => ({
         ...context,
-        pitchContext: fragment.pitchContext,
         lexicalEnvironment: {
           ...extendLexicalEnvironment(fragment.environment, {
             calls: environment?.calls ?? EMPTY_LEXICAL_ENVIRONMENT.calls,

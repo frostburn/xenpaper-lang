@@ -412,7 +412,9 @@ tuplet tuplet
 ```
 
 Each use retains the container's sequence or parallel structure and slot timing.
-Its pitches are captured at declaration; playback uses the current timing context.
+Stored scale degrees and their pitch modifiers resolve in the tuning where
+they are used. Pitch arithmetic evaluates in the tuning where it runs. An
+explicit conversion such as `pitch(2d)` stores the resulting pitch offset.
 
 Bindings can also store fragments with rests, ties, repeats, or directives.
 
@@ -423,9 +425,9 @@ let refrain <- |: phrase held :|
 refrain
 ```
 
-A stored fragment captures its lexical bindings and starting pitch context.
-It runs each time it is played, using the caller's pulse, beat position, and
-prevailing directives. Tuning changes, assignments, and directives within the
+A stored fragment captures its lexical bindings. It runs each time it is
+played, using the caller's tuning, pulse, beat position, and prevailing
+directives. Tuning changes, assignments, and directives within the
 fragment are local to that playback. Repeats expand when played and count
 toward the expansion limit. A fragment can be passed to or returned from a
 function and composed with other scores.

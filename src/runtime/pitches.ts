@@ -1448,6 +1448,7 @@ export function scalePitchOffset(offset: PitchOffsetValue, factor: Fraction): Pi
     : undefined
   return {
     ...offset,
+    degreeModifiers: undefined,
     value: offset.value.mul(new Value(factor)),
     formula: scaledFormula,
     spelling: scaledFormula ? spellIntervalFormula(scaledFormula) : undefined,

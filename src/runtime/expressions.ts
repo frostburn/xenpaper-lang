@@ -7,7 +7,7 @@ import { evaluateLiteral, type NumericLiteralNode } from './literals.js'
 import { executeFunctionStatements, type FunctionBindings } from './function-statements.js'
 import { expandHarmonicSegment } from './harmonic-segments.js'
 import { needsScorePlayback } from './score-fragments.js'
-import { equaveShift as modifierEquaveShift, equaveShifts } from './pitch-modifiers.js'
+import { equaveShift as modifierEquaveShift } from './pitch-modifiers.js'
 import type {
   EvaluatedLiteral,
   LexicalEnvironment,
@@ -782,15 +782,62 @@ function containerItems(
   )
 }
 
-/** Keep a reference visible when container operations extract a nested element. */
-function annotateReference(value: EvaluatedLiteral, origin: SourceOrigin): EvaluatedLiteral {
+function pitchOperatorDisplacement(context: PitchContext, modifier: string): Value {
+  const inflection = requirePitchOperator(
+    context,
+    modifier === 'up' || modifier === 'down' ? 'up' : 'lift',
+  )
+  return modifier === 'down' || modifier === 'drop' ? inflection.neg() : inflection
+}
+
+function resolveScaleDegree(
+  degree: number,
+  modifiers: readonly string[],
+  context: PitchContext,
+): Value {
+  const degrees = context.degrees
+  let pitch = degree
+    ? degrees[mmod(degree - 1, degrees.length)]!.add(
+        context.degreeEquave.mul(new Value(Math.floor((degree - 1) / degrees.length))),
+      )
+    : Value.cents(0)
+  for (const modifier of modifiers) {
+    const shift = modifierEquaveShift(modifier)
+    pitch = pitch.add(
+      shift
+        ? context.degreeEquave.mul(new Value(shift))
+        : pitchOperatorDisplacement(context, modifier),
+    )
+  }
+  return pitch
+}
+
+/** Keep nested source references and resolve stored degrees in the reader's tuning. */
+function annotateReference(
+  value: EvaluatedLiteral,
+  origin: SourceOrigin,
+  mapping?: PrimeMapping | PitchContext,
+): EvaluatedLiteral {
   const origins = [...value.origins, origin]
   if (value.kind === 'container')
     return {
       ...value,
       origins,
-      values: value.values.map((item) => annotateReference(item, origin)),
+      values: value.values.map((item) => annotateReference(item, origin, mapping)),
     }
+  if (
+    mapping &&
+    value.kind === 'pitchOffset' &&
+    value.scaleDegree !== undefined &&
+    value.degreeModifiers
+  ) {
+    const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
+    return {
+      ...value,
+      origins,
+      value: resolveScaleDegree(value.scaleDegree, value.degreeModifiers, context),
+    }
+  }
   return { ...value, origins }
 }
 
@@ -821,7 +868,6 @@ export function evaluateExpression(
           kind: 'scoreFragment',
           expression: node,
           environment: captureScoreEnvironment(environment),
-          pitchContext: 'rootPitch' in mapping ? mapping : createPitchContext(mapping),
           value: new Value(0),
           origins: [{ location: node.location, role: 'structural' }],
         },
@@ -831,18 +877,13 @@ export function evaluateExpression(
     if (node.type === 'DegreeLiteral') {
       const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
       const degree = Number(node.degree)
-      const degrees = context.degrees
-      const value = (
-        degree
-          ? degrees[mmod(degree - 1, degrees.length)]!.add(
-              context.degreeEquave.mul(new Value(Math.floor((degree - 1) / degrees.length))),
-            )
-          : Value.cents(0)
-      ).add(context.degreeEquave.mul(new Value(equaveShifts(node.modifiers))))
+      const modifiers = node.modifiers.map((modifier) => modifier.kind)
+      const value = resolveScaleDegree(degree, modifiers, context)
       return {
         value: {
           ...result('pitchOffset', value, [{ location: node.location, role: 'literal' }]),
           scaleDegree: degree,
+          degreeModifiers: modifiers,
         },
         diagnostics: [],
       }
@@ -893,7 +934,7 @@ export function evaluateExpression(
         const value = scope.variables.get(node.name)
         if (value)
           return {
-            value: annotateReference(value, { location: node.location, role: 'literal' }),
+            value: annotateReference(value, { location: node.location, role: 'literal' }, mapping),
             diagnostics: [],
           }
       }
@@ -983,9 +1024,7 @@ export function evaluateExpression(
             ? context.mos.equave.mul(new Value(equaveShift))
             : Value.pitch(new Value(2).pow(equaveShift))
       } else {
-        const inflectionKind = modifier === 'up' || modifier === 'down' ? 'up' : 'lift'
-        let inflection = requirePitchOperator(context, inflectionKind)
-        if (modifier === 'down' || modifier === 'drop') inflection = inflection.neg()
+        const inflection = pitchOperatorDisplacement(context, modifier)
         scalarDisplacement = inflection
         pitchDisplacement = inflection
       }
@@ -1036,6 +1075,9 @@ export function evaluateExpression(
           ...offset,
           origins,
           value: offset.value.add(pitchDisplacement),
+          ...(offset.degreeModifiers
+            ? { degreeModifiers: [...offset.degreeModifiers, modifier] }
+            : {}),
           ...(offset.formula ? { formula: shiftedFormula(offset.formula) } : {}),
           ...(offset.spelling
             ? {
@@ -1118,6 +1160,7 @@ export function evaluateExpression(
             ? result('scalar', operand.value.value.neg(), origins)
             : {
                 ...operand.value,
+                degreeModifiers: undefined,
                 value: operand.value.value.neg(),
                 formula: operand.value.formula
                   ? new Map(
