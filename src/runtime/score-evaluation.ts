@@ -10,7 +10,7 @@ import {
   isComparison,
   isTruthy,
   preludeEnvironment,
-  prepareFunctionCall,
+  evaluateFunctionCall,
   stringValue,
 } from './expressions.js'
 import { expandRepeats } from './repeat-expansion.js'
@@ -1622,25 +1622,28 @@ export function evaluateScoreSemantics(
       })
     }
     if (current.type === 'CallExpression') {
-      const prepared = prepareFunctionCall(current, context, environment)
-      if (prepared) {
-        if (!('expression' in prepared)) return prepared
-        const returned = changeVisitor(visitor, (context) => ({
-          ...context,
-          lexicalEnvironment: prepared.environment,
-        })).visit(prepared.expression, {
-          loop: undefined,
-          subdivisionContext: visitor.scope.resolve,
-        })
-        const diagnostics = [...prepared.diagnostics, ...returned.diagnostics]
-        if (!hasShape(returned)) return { diagnostics }
+      const returned = evaluateFunctionCall(
+        current,
+        context,
+        environment,
+        (expression, scope, protectedReturn) =>
+          changeVisitor(visitor, (context) => ({
+            ...context,
+            lexicalEnvironment: scope,
+          })).visit(expression, {
+            loop: undefined,
+            stopOnError: protectedReturn || visitor.scope.stopOnError,
+            subdivisionContext: visitor.scope.resolve,
+          }),
+      )
+      if (returned) {
+        if (!hasShape(returned)) return returned
         return {
           ...returned,
           shape: {
             ...annotateScoreUse(returned.shape, origin(current)),
             isolatedDirectiveScope: true,
           },
-          diagnostics,
         }
       }
     }

@@ -281,9 +281,9 @@ operand determines the result. Both operators produce Booleans.
 Use `try { ... } catch(message) { ... }` to recover from an evaluation error.
 `throw(message)` raises an error with a string message. A handler can read
 that message or omit the binding with `catch { ... }`. A failed `try`
-discards its emitted score and binding updates. A successful `try` keeps
-them and skips the handler. Expansion limits, recursion, and invalid control
-flow still stop evaluation.
+discards its emitted score and binding updates, including when evaluation
+of a `ret` operand fails. A successful `try` keeps them and skips the handler.
+Expansion limits, recursion, and invalid control flow still stop evaluation.
 
 ```text
 try {

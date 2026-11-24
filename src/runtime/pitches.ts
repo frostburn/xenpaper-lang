@@ -14,7 +14,11 @@ import type {
 import type { Diagnostic } from '../diagnostics.js'
 import { Value } from '../value.js'
 import { applyFjsInflections, fjsPrimeComma, groupFjsInflections } from './fjs.js'
-import { evaluateExpression, prepareFunctionCall } from './expressions.js'
+import {
+  evaluateExpression,
+  evaluateFunctionCall,
+  type ExpressionEvaluationResult,
+} from './expressions.js'
 import type {
   AbsolutePitchValue,
   IntervalSpelling,
@@ -346,28 +350,70 @@ export function applyPitchContextChange(
       continue
     }
     if (statement.type === 'ContextDegreeMapping') {
+      type DegreeExpression = {
+        expression: Expression
+        environment?: LexicalEnvironment
+        evaluated?: ExpressionEvaluationResult
+      }
       type ExpandedDegrees = {
-        values: { expression: Expression; environment?: LexicalEnvironment }[]
+        values: DegreeExpression[]
         iterable: boolean
       }
+      class ScaleFunctionError extends TypeError {
+        constructor(readonly diagnostics: readonly Diagnostic[]) {
+          super(diagnostics[0]?.message ?? 'The scale constructor could not be evaluated.')
+        }
+      }
+      const evaluateDegree = ({ expression, environment, evaluated }: DegreeExpression) =>
+        evaluated ?? evaluateExpression(expression, context, environment)
       const expandDegreeExpression = (
         expression: Expression,
         expressionEnvironment = environment,
       ): ExpandedDegrees => {
         if (expression.type === 'CallExpression') {
-          const prepared = prepareFunctionCall(expression, context, expressionEnvironment)
+          const returned = evaluateFunctionCall(
+            expression,
+            context,
+            expressionEnvironment,
+            (operand, scope, protectedReturn) => {
+              try {
+                const expanded = expandDegreeExpression(operand, scope)
+                if (!protectedReturn) return { ...expanded, diagnostics: [] }
+                const values = expanded.values.map((value) => ({
+                  ...value,
+                  evaluated: evaluateDegree(value),
+                }))
+                return {
+                  ...expanded,
+                  values,
+                  diagnostics: values.flatMap(({ evaluated }) => evaluated.diagnostics),
+                }
+              } catch (error) {
+                if (error instanceof ScaleFunctionError) return { diagnostics: error.diagnostics }
+                if (protectedReturn && error instanceof TypeError)
+                  return {
+                    diagnostics: [
+                      {
+                        code: 'XP_CONTEXT',
+                        severity: 'error',
+                        message: error.message,
+                        locations: [operand.location],
+                      },
+                    ],
+                  }
+                throw error
+              }
+            },
+          )
           // Calls without user definitions may still be scalar built-ins such as pitch() and
           // ratio(); leave those intact for ordinary expression evaluation below.
-          if (!prepared)
+          if (!returned)
             return {
               values: [{ expression, environment: expressionEnvironment }],
               iterable: false,
             }
-          if (!('expression' in prepared))
-            throw new TypeError(
-              prepared.diagnostics[0]?.message ?? 'The scale constructor could not be evaluated.',
-            )
-          return expandDegreeExpression(prepared.expression, prepared.environment)
+          if (!('values' in returned)) throw new ScaleFunctionError(returned.diagnostics)
+          return returned
         }
         if (expression.type === 'Group' || expression.type === 'NormalizeToSlot') {
           if (!expression.expression) return { values: [], iterable: true }
@@ -466,8 +512,8 @@ export function applyPitchContextChange(
         }
       }
       const values = statement.values.flatMap((value) => expandDegreeExpression(value).values)
-      const evaluatedDegrees = values.flatMap(({ expression, environment: valueEnvironment }) => {
-        const evaluated = evaluateExpression(expression, context, valueEnvironment)
+      const evaluatedDegrees = values.flatMap((value) => {
+        const evaluated = evaluateDegree(value)
         if (!('value' in evaluated))
           throw new TypeError('Degree assignments require pitch intervals.')
         return evaluated.value.kind === 'container' ? evaluated.value.values : [evaluated.value]

@@ -4,7 +4,11 @@ import type { Diagnostic } from '../diagnostics.js'
 import { Value } from '../value.js'
 import { evaluateBuiltinArgument, evaluateBuiltinCall, requireInteger } from './builtins.js'
 import { evaluateLiteral, type NumericLiteralNode } from './literals.js'
-import { executeFunctionStatements, type FunctionBindings } from './function-statements.js'
+import {
+  executeFunctionStatements,
+  type FunctionBindings,
+  type ReturnEvaluator,
+} from './function-statements.js'
 import { expandHarmonicSegment } from './harmonic-segments.js'
 import { needsScorePlayback } from './score-fragments.js'
 import { equaveShift as modifierEquaveShift } from './pitch-modifiers.js'
@@ -216,13 +220,7 @@ function isNumericLiteral(node: Expression): node is NumericLiteralNode {
   )
 }
 
-export type FunctionCallPreparation =
-  | {
-      readonly expression: Expression
-      readonly environment: LexicalEnvironment
-      readonly diagnostics: readonly Diagnostic[]
-    }
-  | { readonly diagnostics: readonly Diagnostic[] }
+type CallDiagnostics = { readonly diagnostics: readonly Diagnostic[] }
 
 function coerceParameter(
   value: EvaluatedLiteral,
@@ -276,12 +274,14 @@ function coerceParameter(
   throw new TypeError(`Value cannot be coerced to ${coercion.raw}.`)
 }
 
-/** Prepare a user function once; score and scalar consumers evaluate its returned AST themselves. */
-export function prepareFunctionCall(
+/** Evaluate a user call with the caller's interpretation of its return operand. */
+export function evaluateFunctionCall<Result extends CallDiagnostics>(
   node: Extract<Expression, { type: 'CallExpression' }>,
-  mapping: PrimeMapping | PitchContext = DEFAULT_PITCH_CONTEXT,
-  environment: LexicalEnvironment = preludeEnvironment(),
-): FunctionCallPreparation | undefined {
+  mapping: PrimeMapping | PitchContext,
+  environment: LexicalEnvironment | undefined,
+  evaluateReturn: ReturnEvaluator<Result>,
+): Result | CallDiagnostics | undefined {
+  environment ??= preludeEnvironment()
   const value = lookupBinding(node.callee, environment)
   if (!value) return undefined
   if (!isCallableValue(value))
@@ -295,7 +295,7 @@ export function prepareFunctionCall(
         },
       ],
     }
-  return prepareCallable(value, node, node.arguments, mapping, environment)
+  return evaluateCallable(value, node, node.arguments, mapping, environment, evaluateReturn)
 }
 
 function lookupBinding(
@@ -316,13 +316,14 @@ function lookupBinding(
   }
 }
 
-function prepareCallable(
+function evaluateCallable<Result extends CallDiagnostics>(
   callable: CallableValue,
   node: Pick<Extract<Expression, { type: 'CallExpression' }>, 'callee' | 'location'>,
   args: readonly (Expression | EvaluatedLiteral)[],
   mapping: PrimeMapping | PitchContext,
   environment: LexicalEnvironment,
-): FunctionCallPreparation {
+  evaluateReturn: ReturnEvaluator<Result>,
+): Result | CallDiagnostics {
   const identity = callable.kind === 'function' ? callable.definition : callable.identity
   const declaration = callable.kind === 'function' ? callable.definition.declaration : undefined
   if (environment.calls.has(identity))
@@ -378,15 +379,16 @@ function prepareCallable(
     const variables = new Map(
       callable.parameters.map((name, index) => [name, supplied[index]!.value]),
     )
-    return {
-      expression: callable.body,
-      environment: extendLexicalEnvironment(callable.environment, {
+    const returned = evaluateReturn(
+      callable.body,
+      extendLexicalEnvironment(callable.environment, {
         variables,
         calls,
         functionBudget,
       }),
-      diagnostics,
-    }
+      false,
+    )
+    return { ...returned, diagnostics: [...diagnostics, ...returned.diagnostics] }
   }
   const { definition } = callable
   const bindings: FunctionBindings = new WeakMap()
@@ -436,6 +438,7 @@ function prepareCallable(
     bodyEnvironment,
     bindings,
     functionBudget,
+    evaluateReturn,
   )
   diagnostics.push(...executed.diagnostics)
   if (!executed.environment) {
@@ -446,7 +449,10 @@ function prepareCallable(
       })),
     }
   }
-  const returned = executed.returned ?? definition.body.returnStatement
+  const finalReturn = definition.body.returnStatement
+  const returned =
+    executed.returned ??
+    (finalReturn && evaluateReturn(finalReturn.value, executed.environment, false))
   if (!returned) {
     diagnostics.push({
       code: 'XP_MISSING_RETURN',
@@ -456,11 +462,7 @@ function prepareCallable(
     })
     return { diagnostics }
   }
-  return {
-    expression: returned.value,
-    environment: executed.environment,
-    diagnostics,
-  }
+  return { ...returned, diagnostics: [...diagnostics, ...returned.diagnostics] }
 }
 
 function diagnostic(node: Expression, error: unknown): Diagnostic {
@@ -1398,35 +1400,26 @@ export function evaluateExpression(
       return { ...branch, diagnostics: [...condition.diagnostics, ...branch.diagnostics] }
     }
     if (node.type === 'CallExpression') {
-      const evaluatePrepared = (prepared: FunctionCallPreparation): ExpressionEvaluationResult => {
-        if (!('expression' in prepared)) return prepared
-        const body = evaluateExpression(prepared.expression, mapping, prepared.environment)
-        return {
-          ...body,
-          diagnostics: [...prepared.diagnostics, ...body.diagnostics],
-        }
-      }
-      const prepared = prepareFunctionCall(node, mapping, environment)
-      if (prepared) return evaluatePrepared(prepared)
+      const evaluateReturn = (expression: Expression, scope: LexicalEnvironment) =>
+        evaluateExpression(expression, mapping, scope)
+      const returned = evaluateFunctionCall(node, mapping, environment, evaluateReturn)
+      if (returned) return returned
       return evaluateBuiltinCall(
         node,
         environment,
         (expression, scope = environment) => evaluateExpression(expression, mapping, scope),
         (callback, args) =>
-          evaluatePrepared(
-            prepareCallable(
-              callback,
-              {
-                callee:
-                  callback.kind === 'function'
-                    ? callback.definition.declaration.name.name
-                    : 'lambda',
-                location: node.location,
-              },
-              args,
-              mapping,
-              environment,
-            ),
+          evaluateCallable(
+            callback,
+            {
+              callee:
+                callback.kind === 'function' ? callback.definition.declaration.name.name : 'lambda',
+              location: node.location,
+            },
+            args,
+            mapping,
+            environment,
+            evaluateReturn,
           ),
       )
     }
