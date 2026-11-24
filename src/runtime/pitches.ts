@@ -12,6 +12,7 @@ import type {
   SignatureDeclaration,
 } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
+import { EvaluationError } from '../diagnostics.js'
 import { Value } from '../value.js'
 import { applyFjsInflections, fjsPrimeComma, groupFjsInflections } from './fjs.js'
 import {
@@ -359,11 +360,6 @@ export function applyPitchContextChange(
         values: DegreeExpression[]
         iterable: boolean
       }
-      class ScaleFunctionError extends TypeError {
-        constructor(readonly diagnostics: readonly Diagnostic[]) {
-          super(diagnostics[0]?.message ?? 'The scale constructor could not be evaluated.')
-        }
-      }
       const evaluateDegree = ({ expression, environment, evaluated }: DegreeExpression) =>
         evaluated ?? evaluateExpression(expression, context, environment)
       const expandDegreeExpression = (
@@ -389,7 +385,7 @@ export function applyPitchContextChange(
                   diagnostics: values.flatMap(({ evaluated }) => evaluated.diagnostics),
                 }
               } catch (error) {
-                if (error instanceof ScaleFunctionError) return { diagnostics: error.diagnostics }
+                if (error instanceof EvaluationError) return { diagnostics: error.diagnostics }
                 if (protectedReturn && error instanceof TypeError)
                   return {
                     diagnostics: [
@@ -412,7 +408,7 @@ export function applyPitchContextChange(
               values: [{ expression, environment: expressionEnvironment }],
               iterable: false,
             }
-          if (!('values' in returned)) throw new ScaleFunctionError(returned.diagnostics)
+          if (!('values' in returned)) throw new EvaluationError(returned.diagnostics)
           return returned
         }
         if (expression.type === 'Group' || expression.type === 'NormalizeToSlot') {
@@ -471,10 +467,15 @@ export function applyPitchContextChange(
         const enumerated = expression
         let enumerands = enumerated.enumerands
         if (!enumerands) {
-          const endpoints = [enumerated.first, enumerated.rangeEnd!].map((endpoint) => {
-            const evaluated = evaluateExpression(endpoint, context, expressionEnvironment)
-            if (!('value' in evaluated) || evaluated.value.kind !== 'scalar') return undefined
-            const exact = evaluated.value.value.exactRational()
+          const evaluated = [enumerated.first, enumerated.rangeEnd!].map((endpoint) =>
+            evaluateExpression(endpoint, context, expressionEnvironment),
+          )
+          const diagnostics = evaluated.flatMap((result) => result.diagnostics)
+          if (diagnostics.some(({ severity }) => severity === 'error'))
+            throw new EvaluationError(diagnostics)
+          const endpoints = evaluated.map((result) => {
+            if (!('value' in result) || result.value.kind !== 'scalar') return undefined
+            const exact = result.value.value.exactRational()
             return exact?.d === 1 ? BigInt(exact.s * exact.n) : undefined
           })
           if (endpoints.some((endpoint) => endpoint === undefined))
@@ -482,7 +483,14 @@ export function applyPitchContextChange(
           const [start, end] = endpoints as [bigint, bigint]
           const distance = start <= end ? end - start : start - end
           if (distance > 10_000n)
-            throw new RangeError('Enumerated scale exceeds the 10000-member expansion limit.')
+            throw new EvaluationError([
+              {
+                code: 'XP_EXPANSION_LIMIT',
+                severity: 'error',
+                message: 'Enumerated scale exceeds the 10000-member expansion limit.',
+                locations: [enumerated.location],
+              },
+            ])
           const step = start <= end ? 1n : -1n
           enumerands = []
           for (let value = start; ; value += step) {
