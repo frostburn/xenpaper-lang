@@ -25,6 +25,16 @@ function timing(source: string) {
 }
 
 describe('binary ties', () => {
+  it('keeps the first sounding beat when tying a continued parallel', () => {
+    expect(timing('((. C, . D) =) -> C')).toEqual({
+      duration: '4',
+      notes: [
+        ['1', '3'],
+        ['1', '2'],
+      ],
+    })
+  })
+
   it.each(['C->C', 'C -> C', '0->0', '3/2->3/2', '1\\12->1\\12'])(
     'parses compact and spaced operands: %s',
     (source) => {

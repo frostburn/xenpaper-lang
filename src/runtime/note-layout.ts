@@ -15,7 +15,9 @@ export interface PlacedNote {
 interface SustainTarget {
   first: number
   last: number
-  start: Fraction
+  // A normalized slot stretches from its written start. A chord or tie stretches
+  // from its earliest sounding note, which can follow rests in every branch.
+  anchor?: Fraction
   // A chord (or a tied bundle) takes the first following continuation as its unit.
   span?: Fraction
 }
@@ -41,6 +43,14 @@ export interface LayoutVisitor {
 export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
   const notes: PlacedNote[] = []
   const orphaned: ContinueShape[] = []
+  function earliestOnset({ first, last }: SustainTarget): Fraction {
+    let earliest = notes[first]!.start
+    for (let i = first + 1; i < last; i++) {
+      const onset = notes[i]!.start
+      if (onset.compare(earliest) < 0) earliest = onset
+    }
+    return earliest
+  }
   function sound(source: Sound, start: Fraction): PlacedNote {
     const note = {
       pitch: source.pitch,
@@ -69,7 +79,7 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
       case 'attack': {
         const note = sound(node, start)
         visitor?.attack(node, note)
-        return { first, last: notes.length, start, span: node.duration }
+        return { first, last: notes.length, anchor: start, span: node.duration }
       }
       case 'rest':
         return undefined
@@ -79,12 +89,13 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
           visitor?.orphan(node)
           return
         }
+        const anchor = active.anchor ?? earliestOnset(active)
         const unit = active.span ?? node.duration
         const span = unit.add(node.duration)
         const factor = unit.n ? span.div(unit) : new Fraction(1)
         for (let i = active.first; i < active.last; i++) {
           const note = notes[i]!
-          note.start = active.start.add(note.start.sub(active.start).mul(factor))
+          note.start = anchor.add(note.start.sub(anchor).mul(factor))
           note.duration = unit.n ? note.duration.mul(factor) : note.duration.add(node.duration)
           note.origins = [...note.origins, ...node.origins]
           if (node.extendsAutomation === false) note.glideComplete = true
@@ -92,7 +103,7 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
             note.automation = { ...note.automation, duration: note.duration }
           }
         }
-        return { ...active, span }
+        return { ...active, anchor, span }
       }
       case 'sequence': {
         let cursor = start
@@ -105,8 +116,7 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
         return {
           first,
           last: notes.length,
-          start,
-          span: node.normalized ? node.duration : undefined,
+          ...(node.normalized && { anchor: start, span: node.duration }),
         }
       }
       case 'parallel':
@@ -116,7 +126,7 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
           visitor?.leaveScope(start.add(node.duration))
         }
         if (first === notes.length) return undefined
-        return { first, last: notes.length, start }
+        return { first, last: notes.length }
       default:
         visitor?.control(node, start, sound)
         return active
