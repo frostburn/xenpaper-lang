@@ -207,8 +207,8 @@ describe('lexical declarations', () => {
       body: { returnStatement: { value: { type: 'Sequence' } } },
     })
     if (declaration.type !== 'FunctionDeclaration') throw new Error('Expected function.')
-    const returned = declaration.body.returnStatement.value
-    if (returned.type !== 'Sequence') throw new Error('Expected returned sequence.')
+    const returned = declaration.body.returnStatement?.value
+    if (returned?.type !== 'Sequence') throw new Error('Expected returned sequence.')
     expect(returned.items.slice(0, 3)).toMatchObject([
       { type: 'Directive', name: 'subdivision' },
       { type: 'PitchLiteral', raw: 'D' },
@@ -832,6 +832,36 @@ describe('Xenpaper surface grammar', () => {
       { type: 'Comment', raw: '# one # comment', value: ' one # comment' },
     ])
     expect(program.comments[0]!.location.start.offset).toBe(8)
+  })
+
+  it('keeps hashes in record keys and strings out of the comment list', () => {
+    expect(
+      parse('let data <- record { <<#key>>: «#value» } # real comment').comments,
+    ).toMatchObject([{ raw: '# real comment' }])
+  })
+
+  it.each([
+    ['<<>>', ''],
+    ['«»', ''],
+    [String.raw`<<a\n\>><<»"\u266F>>`, 'a\n>><<»"♯'],
+    [String.raw`«a\n\»«>>"\u266F»`, 'a\n»«>>"♯'],
+    [String.raw`<<end\>>>`, 'end>'],
+  ])('parses %s as a string literal', (source, value) => {
+    expect(parse(source).body[0]).toMatchObject({ type: 'StringLiteral', value })
+  })
+
+  it.each(['<<missing»', '«missing>>'])('rejects mismatched string delimiters in %s', (source) => {
+    expect(() => parse(source)).toThrow(/end of input/)
+  })
+
+  it.each(['"C "D', '"C" D'])('reads %s as two double-equave-shifted notes', (source) => {
+    expect(parse(source).body[0]).toMatchObject({
+      type: 'Sequence',
+      items: [
+        { type: 'PitchModifierExpression', modifier: { kind: 'doubleEquaveUp' } },
+        { type: 'PitchModifierExpression', modifier: { kind: 'doubleEquaveUp' } },
+      ],
+    })
   })
 
   it('collects syntax hashes once for sharp-heavy sources', () => {

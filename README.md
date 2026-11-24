@@ -274,6 +274,24 @@ branches, and normalized slots need a loop of their own.
 
 Use `@not value` to negate a truth value. Parenthesize arithmetic or a
 comparison you want to negate as a unit, for example `@not (guide mod root)`.
+Use `@and` and `@or` to combine conditions. Comparisons bind before `@and`,
+and `@and` binds before `@or`. The right operand is skipped when the left
+operand determines the result. Both operators produce Booleans.
+
+Use `try { ... } catch(message) { ... }` to recover from an evaluation error.
+`throw(message)` raises an error with a string message. A handler can read
+that message or omit the binding with `catch { ... }`. A failed `try`
+discards its emitted score and binding updates. A successful `try` keeps
+them and skips the handler. Expansion limits, recursion, and invalid control
+flow still stop evaluation.
+
+```text
+try {
+  throw(<<missing >> + «theme»)
+} catch(message) {
+  if(message @eq «missing theme») { C E G }
+}
+```
 
 Harmonic segments are iterable ratio containers in value expressions.
 `for(harmonic of 1::5) { ... }` visits 1 through 5, while `5::8` supplies
@@ -445,14 +463,14 @@ Place continuations inside each branch to control its ending independently.
 `[1 2 3]=!` first stretches the tuplet to two slots and then holds its notes
 to that end. Binary `->` ties matching pitches into the following operand.
 
-`fn name(parameters) {
-... ret expression }` creates a lexical closure. The body can run `let` and
-`fn` declarations, assignments, and control blocks before a final `ret`. Use
+`fn name(parameters) { ... }` creates a lexical closure. The body can run `let`
+and `fn` declarations, assignments, and control blocks. `ret expression`
+exits the function immediately, including from a branch, loop, or handler.
+Reaching the end without executing `ret` is an error. Use
 `name <- expression` to update an existing local variable or parameter.
-`throw("message")` halts the call with a diagnostic. The final `ret` can
-produce a value or a score fragment. Commas separate parameters, and a trailing
+`ret` can produce a value or a score fragment. Commas separate parameters, and a trailing
 comma is invalid. Keywords such as `let`, `fn`, `ret`, and `throw` are
-case-sensitive and reserved. `try` and `catch` are reserved for future syntax.
+case-sensitive and reserved.
 Names that are valid musical pitch spellings are likewise unavailable for
 declarations: music always wins and the meaning of a pitch token never depends
 on lexical scope.
@@ -508,6 +526,25 @@ Key signatures may include a diatonic mode after the tonic, such as
 Aeolian, Phrygian, and Locrian; `major` aliases Ionian and `minor` aliases
 Aeolian. Mode names are case-insensitive, and a key without a mode remains
 Ionian.
+
+## Strings and records
+
+Write string literals as `<<text>>` or `«text»`. Both forms accept JSON
+escapes such as `\n`, as well as `\>` and `\»` for literal closing
+characters. Double quotes inside either form can be written directly.
+Use `+` to concatenate strings, `@eq` to compare them, and `[index]` to
+select a Unicode code point. String indices start at zero, with negative
+indices counting from the end.
+
+`record { ... }` stores fields under unique names. Write a bare or quoted key
+in the literal and use a string in brackets to read a field. Strings and
+records can be bound, passed to functions, and returned. The `string` and
+`record` parameter annotations check these types.
+
+```text
+let preset <- record { title: «opening», <<lead phrase>>: (C . D) }
+if(preset[<<title>>] @eq «opening») { preset[«lead phrase»] }
+```
 
 ## Exact values
 

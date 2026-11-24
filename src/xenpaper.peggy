@@ -170,7 +170,7 @@ SequenceExpression
     }
 
 SequenceItem
-  = LoopJump / BindingAssignment / ThrowStatement / Expression
+  = LoopJump / BindingAssignment / ThrowStatement / ReturnStatement / Expression
 
 // Ties compose complete score operands, below arithmetic and postfix marks but
 // above sequencing and parallel composition. Chains associate to the left.
@@ -200,7 +200,11 @@ Expression
     }
 
 TieOperand
-  = expression:(EnumeratedChordArithmetic / (degree:ScaleDegreeLiteral !(Spacing ComparisonOperator) { return degree; }) / ValueExpression)
+  = expression:(
+      (chord:EnumeratedChordArithmetic !(Spacing LogicalOperator) { return chord; })
+      / (degree:ScaleDegreeLiteral !(":" / Spacing (ComparisonOperator / LogicalOperator)) { return degree; })
+      / ValueExpression
+    )
     marks:AttachedPostfixMark* {
       if (!marks.length) return expression;
       return node('PostfixExpression', { expression, marks });
@@ -214,14 +218,27 @@ EnumeratedChordArithmetic
     }
 
 ValueExpression
-  = consequent:ComparisonExpression
+  = consequent:LogicalOrExpression
     alternative:(RequiredSpacing "if" !IdentifierContinue RequiredSpacing condition:ValueExpression RequiredSpacing "else" !IdentifierContinue RequiredSpacing alternate:ValueExpression {
       return { condition, alternate };
     })? {
       return alternative ? node('ConditionalExpression', { consequent, ...alternative }) : consequent;
     }
 
-// Comparisons bind below arithmetic and above the inline conditional.
+LogicalOrExpression
+  = first:LogicalAndExpression rest:(Spacing "@or"i !IdentifierContinue Spacing right:LogicalAndExpression { return { operator: '@or', right }; })* {
+      return foldBinary(first, rest);
+    }
+
+LogicalAndExpression
+  = first:ComparisonExpression rest:(Spacing "@and"i !IdentifierContinue Spacing right:ComparisonExpression { return { operator: '@and', right }; })* {
+      return foldBinary(first, rest);
+    }
+
+LogicalOperator
+  = ("@and"i / "@or"i) !IdentifierContinue
+
+// Comparisons bind below arithmetic and above the logical operators.
 ComparisonExpression
   = left:AdditiveExpression tail:(Spacing operator:ComparisonOperator Spacing right:AdditiveExpression {
       return { operator, right };
@@ -328,9 +345,12 @@ PrimaryExpression
   / IfBlock
   / ForBlock
   / WhileBlock
+  / TryBlock
   / Directive
   / NormalizedGroup
   / LambdaExpression
+  / RecordLiteral
+  / StringLiteral
   / ParenthesizedExpression
   / Rest
   / BarRest
@@ -582,6 +602,13 @@ WhileBlock
 LoopElse
   = Spacing "else" !IdentifierContinue Spacing @BlockSequence
 
+TryBlock
+  = "try" !IdentifierContinue Spacing body:BlockSequence
+    Spacing "catch" !IdentifierContinue Spacing
+    name:("(" Spacing @LocatedIdentifier Spacing ")" Spacing)? handler:BlockSequence {
+      return node('TryBlock', { body, name, handler });
+    }
+
 LoopJump
   = action:$("break" / "continue") !IdentifierContinue {
       return node('LoopJump', { action });
@@ -589,6 +616,7 @@ LoopJump
 
 OperatorToken
   = ComparisonOperator
+  / LogicalOperator
   / "@not"i !IdentifierContinue
 
 Directive
@@ -872,7 +900,7 @@ BindingSequence
     }
 
 StatementStart
-  = ("let" / "fn" / "ret" / "throw" / "if" / "for" / "while" / "break" / "continue") !IdentifierContinue
+  = ("let" / "fn" / "ret" / "throw" / "try" / "if" / "for" / "while" / "break" / "continue") !IdentifierContinue
   / LocatedIdentifier Spacing "<-"
 
 BindingAssignment
@@ -881,14 +909,36 @@ BindingAssignment
     }
 
 ThrowStatement
-  = "throw" !IdentifierContinue Spacing "(" Spacing message:DiagnosticString Spacing ")" {
+  = "throw" !IdentifierContinue Spacing "(" Spacing message:Expression Spacing ")" {
       return node('ThrowStatement', { message });
     }
 
-DiagnosticString
-  = '"' ('\\' (["\\/bfnrt] / "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]) / [^"\\\x00-\x1F])* '"' {
-      return JSON.parse(text());
+StringLiteral
+  = value:QuotedString { return node('StringLiteral', { value }); }
+
+QuotedString
+  = "<<" parts:(StringEscape / !">>" @[^\\\x00-\x1F])* ">>" { return parts.join(''); }
+  / "«" parts:(StringEscape / [^»\\\x00-\x1F])* "»" { return parts.join(''); }
+
+StringEscape
+  = "\\" @(">" / "»")
+  / "\\" (["\\/bfnrt] / "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]) {
+      return JSON.parse('"' + text() + '"');
     }
+
+RecordLiteral
+  = "record" !IdentifierContinue Spacing "{" Spacing entries:RecordEntries? Spacing "}" {
+      return node('RecordLiteral', { entries: entries ?? [] });
+    }
+
+RecordEntries
+  = first:RecordEntry rest:(Spacing "," Spacing @RecordEntry)* (Spacing ",")? { return [first, ...rest]; }
+
+RecordEntry
+  = key:RecordKey Spacing ":" Spacing value:Expression { return node('RecordEntry', { key, value }); }
+
+RecordKey
+  = value:(QuotedString / Identifier) { return node('RecordKey', { value }); }
 
 FunctionDeclaration
   = "fn" !IdentifierContinue RequiredSpacing name:LocatedIdentifier Spacing "(" Spacing
@@ -917,14 +967,16 @@ CoercionAnnotation
     }
 
 FunctionBody
-  = "{" Spacing statements:(statement:FunctionStatement Spacing (StatementDelimiter Spacing)? { return statement; })*
-    returnStatement:ReturnStatement Spacing (StatementDelimiter Spacing)? "}" {
+  = "{" Spacing statements:(
+      statement:FunctionStatement Spacing (StatementDelimiter Spacing)? { return statement; }
+      / statement:ReturnStatement Spacing StatementDelimiter Spacing !"}" { return statement; }
+    )* returnStatement:ReturnStatement? Spacing (StatementDelimiter Spacing)? "}" {
       return node('FunctionBody', { statements, returnStatement });
     }
 
 FunctionStatement
   = VariableDeclaration / FunctionDeclaration / BindingAssignment / ThrowStatement
-  / IfBlock / ForBlock / WhileBlock / LoopJump
+  / IfBlock / ForBlock / WhileBlock / TryBlock / LoopJump
 
 ReturnStatement
   // Return binds more loosely than sequencing and parallel composition so a

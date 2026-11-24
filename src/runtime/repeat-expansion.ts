@@ -205,6 +205,7 @@ export function expandRepeats(
     // Expand their repeats only when the evaluator visits the score.
     if (
       node.type === 'IfBlock' ||
+      node.type === 'TryBlock' ||
       node.type === 'ForBlock' ||
       node.type === 'WhileBlock' ||
       node.type === 'VariableDeclaration' ||

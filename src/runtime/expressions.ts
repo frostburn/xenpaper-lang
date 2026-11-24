@@ -14,6 +14,7 @@ import type {
   LexicalEnvironment,
   PitchOffsetValue,
   ScalarValue,
+  StringValue,
   SourceOrigin,
 } from './types.js'
 import type { PitchContext, PrimeMapping } from './types.js'
@@ -67,10 +68,10 @@ fn cps(factors: container<ratio>, count: integer, equave: ratio <- niente, withU
   ret asSequence(sorted(equaveReduce(grounded, actualEquave)))
 }
 fn eulerGenus(guide: integer, root: integer <- 1/1, equave: ratio <- 2/1) {
-  if(guide @le 0) { throw("Guide tone must be a positive integer.") }
-  if(root @le 0) { throw("Root tone must be a positive integer.") }
-  if(equave @le 1) { throw("Equave must be greater than one.") }
-  if(guide mod root) { throw("Root must divide the guide tone.") }
+  if(guide @le 0) { throw(<<Guide tone must be a positive integer.>>) }
+  if(root @le 0) { throw(<<Root tone must be a positive integer.>>) }
+  if(equave @le 1) { throw(<<Equave must be greater than one.>>) }
+  if(guide mod root) { throw(<<Root must divide the guide tone.>>) }
   while(@not (guide mod equave)) {
     guide <- guide / equave
   }
@@ -165,7 +166,7 @@ export function evaluateDeclaration(
         },
       ],
     }
-  const scalarCoercions = new Set(['ratio', 'pitch', 'integer', 'boolean'])
+  const scalarCoercions = new Set(['ratio', 'pitch', 'integer', 'boolean', 'string', 'record'])
   const supportedCoercion = (coercion: NonNullable<FunctionParameter['coercion']>): boolean => {
     if (scalarCoercions.has(coercion.name)) return !coercion.element
     if (coercion.name === 'container')
@@ -258,6 +259,10 @@ function coerceParameter(
     }
     case 'container':
       if (value.kind === 'container') return value
+      break
+    case 'string':
+    case 'record':
+      if (value.kind === coercion.name) return value
       break
     case 'boolean': {
       if (value.kind !== 'scalar' || !value.value.dimensions.isDimensionless) break
@@ -441,8 +446,18 @@ function prepareCallable(
       })),
     }
   }
+  const returned = executed.returned ?? definition.body.returnStatement
+  if (!returned) {
+    diagnostics.push({
+      code: 'XP_MISSING_RETURN',
+      severity: 'error',
+      message: `Function ${node.callee}() reached the end without ret.`,
+      locations: [node.location, definition.body.location],
+    })
+    return { diagnostics }
+  }
   return {
-    expression: definition.body.returnStatement.value,
+    expression: returned.value,
     environment: executed.environment,
     diagnostics,
   }
@@ -454,6 +469,34 @@ function diagnostic(node: Expression, error: unknown): Diagnostic {
   if (message.toLowerCase().includes('division by zero')) code = 'XP_DIVISION_BY_ZERO'
   else if (message.toLowerCase().includes('dimension')) code = 'XP_DIMENSION_MISMATCH'
   return { code, severity: 'error', message, locations: [node.location] }
+}
+
+export function stringValue(text: string, origins: readonly SourceOrigin[]): StringValue {
+  return { kind: 'string', text, origins, value: new Value(0) }
+}
+
+export function evaluateThrow(
+  node: Extract<Expression, { type: 'ThrowStatement' }>,
+  mapping: PrimeMapping | PitchContext,
+  environment: LexicalEnvironment | undefined,
+): readonly Diagnostic[] {
+  const message = evaluateExpression(node.message, mapping, environment)
+  if (!('value' in message)) return message.diagnostics
+  return [
+    ...message.diagnostics,
+    message.value.kind === 'string'
+      ? {
+          code: 'XP_THROW',
+          severity: 'error',
+          message: message.value.text,
+          locations: [node.location],
+        }
+      : diagnostic(node.message, new TypeError('throw() requires a string.')),
+  ]
+}
+
+function booleanValue(value: boolean, origins: readonly SourceOrigin[]): ScalarValue {
+  return { ...result('scalar', new Value(value ? 1 : 0), origins), boolean: true }
 }
 
 function result(kind: 'scalar', value: Value, origins: readonly SourceOrigin[]): ScalarValue
@@ -712,6 +755,13 @@ function compareOperands(
   left: EvaluatedLiteral,
   right: EvaluatedLiteral,
 ): ScalarValue {
+  if (left.kind === 'string' && right.kind === 'string') {
+    const order = left.text < right.text ? -1 : left.text > right.text ? 1 : 0
+    return booleanValue(
+      comparisons.get(node.operator)!(order, order === 0),
+      operatorOrigins(left, right, node),
+    )
+  }
   const magnitude = (operand: EvaluatedLiteral): Value => {
     if (operand.kind === 'absolutePitch') return operand.rootOffset
     if (operand.kind === 'scalar' || operand.kind === 'pitchOffset') return operand.value
@@ -725,10 +775,7 @@ function compareOperands(
   const order = lhs.compare(rhs)
   const equal = lhs.isExact() && rhs.isExact() ? lhs.equals(rhs) : lhs.valueOf() === rhs.valueOf()
   const value = comparisons.get(node.operator)!(order, equal)
-  return {
-    ...result('scalar', new Value(value ? 1 : 0), operatorOrigins(left, right, node)),
-    boolean: true,
-  }
+  return booleanValue(value, operatorOrigins(left, right, node))
 }
 
 export function isTruthy(value: EvaluatedLiteral): boolean {
@@ -736,6 +783,8 @@ export function isTruthy(value: EvaluatedLiteral): boolean {
   if (value.kind === 'absolutePitch' || value.kind === 'scoreFragment' || isCallableValue(value))
     return true
   if (value.kind === 'container') return value.values.length > 0
+  if (value.kind === 'string') return value.text.length > 0
+  if (value.kind === 'record') return value.fields.size > 0
   return !value.value.isZero()
 }
 
@@ -746,6 +795,8 @@ function binary(
   node: Expression,
 ): EvaluatedLiteral {
   if (operator === 'al') return left.kind === 'undefined' ? right : left
+  if (operator === '+' && left.kind === 'string' && right.kind === 'string')
+    return stringValue(left.text + right.text, operatorOrigins(left, right, node))
   if (left.kind === 'container' || right.kind === 'container') {
     if (left.kind === 'container' && right.kind === 'container') {
       if (left.composition && right.composition && left.composition !== right.composition)
@@ -788,7 +839,11 @@ function binary(
     isCallableValue(left) ||
     isCallableValue(right) ||
     left.kind === 'scoreFragment' ||
-    right.kind === 'scoreFragment'
+    right.kind === 'scoreFragment' ||
+    left.kind === 'string' ||
+    right.kind === 'string' ||
+    left.kind === 'record' ||
+    right.kind === 'record'
   )
     throw new TypeError(`Operator ${operator} requires numeric operands.`)
   switch (operator) {
@@ -876,6 +931,14 @@ function annotateReference(
       origins,
       values: value.values.map((item) => annotateReference(item, origin, mapping)),
     }
+  if (value.kind === 'record')
+    return {
+      ...value,
+      origins,
+      fields: new Map(
+        [...value.fields].map(([key, item]) => [key, annotateReference(item, origin, mapping)]),
+      ),
+    }
   if (
     mapping &&
     value.kind === 'pitchOffset' &&
@@ -913,6 +976,32 @@ export function evaluateExpression(
   environment: LexicalEnvironment = preludeEnvironment(),
 ): ExpressionEvaluationResult {
   try {
+    if (node.type === 'StringLiteral')
+      return {
+        value: stringValue(node.value, [{ location: node.location, role: 'literal' }]),
+        diagnostics: [],
+      }
+    if (node.type === 'RecordLiteral') {
+      const fields = new Map<string, EvaluatedLiteral>()
+      const diagnostics: Diagnostic[] = []
+      for (const entry of node.entries) {
+        const key = entry.key.value
+        if (fields.has(key)) throw new TypeError(`Duplicate record key ${JSON.stringify(key)}.`)
+        const field = evaluateExpression(entry.value, mapping, environment)
+        diagnostics.push(...field.diagnostics)
+        if (!('value' in field)) return { diagnostics }
+        fields.set(key, field.value)
+      }
+      return {
+        value: {
+          kind: 'record',
+          fields,
+          value: new Value(0),
+          origins: [{ location: node.location, role: 'literal' }],
+        },
+        diagnostics,
+      }
+    }
     if (needsScorePlayback(node)) {
       return {
         value: {
@@ -1050,7 +1139,9 @@ export function evaluateExpression(
         operand.value.kind === 'container' ||
         operand.value.kind === 'undefined' ||
         isCallableValue(operand.value) ||
-        operand.value.kind === 'scoreFragment'
+        operand.value.kind === 'scoreFragment' ||
+        operand.value.kind === 'string' ||
+        operand.value.kind === 'record'
       )
         throw new TypeError('Pitch modifiers require a numeric operand.')
       const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
@@ -1159,7 +1250,9 @@ export function evaluateExpression(
         operand.value.kind === 'container' ||
         operand.value.kind === 'undefined' ||
         isCallableValue(operand.value) ||
-        operand.value.kind === 'scoreFragment'
+        operand.value.kind === 'scoreFragment' ||
+        operand.value.kind === 'string' ||
+        operand.value.kind === 'record'
       )
         throw new TypeError('Unary operators require a numeric operand.')
       if (node.operator === '+') return operand
@@ -1243,12 +1336,26 @@ export function evaluateExpression(
       const left = evaluateExpression(node.left, mapping, environment)
       if (!('value' in left)) return left
       if (node.operator === 'al' && left.value.kind !== 'undefined') return left
+      const logical = node.operator === '@and' || node.operator === '@or'
+      if (logical) {
+        const truth = isTruthy(left.value)
+        if (truth === (node.operator === '@or'))
+          return {
+            value: booleanValue(truth, [
+              ...left.value.origins,
+              { location: node.location, role: 'operator' },
+            ]),
+            diagnostics: left.diagnostics,
+          }
+      }
       const right = evaluateExpression(node.right, mapping, environment)
       const diagnostics = [...left.diagnostics, ...right.diagnostics]
       if (!('value' in right)) return { diagnostics }
-      const value = isComparison(node.operator)
-        ? compareOperands(node, left.value, right.value)
-        : binary(node.operator, left.value, right.value, node)
+      const value = logical
+        ? booleanValue(isTruthy(right.value), operatorOrigins(left.value, right.value, node))
+        : isComparison(node.operator)
+          ? compareOperands(node, left.value, right.value)
+          : binary(node.operator, left.value, right.value, node)
       return { value, diagnostics }
     }
     if (node.type === 'IndexExpression') {
@@ -1256,8 +1363,24 @@ export function evaluateExpression(
       const index = evaluateExpression(node.index, mapping, environment)
       const diagnostics = [...container.diagnostics, ...index.diagnostics]
       if (!('value' in container) || !('value' in index)) return { diagnostics }
+      if (container.value.kind === 'record') {
+        if (index.value.kind !== 'string') throw new TypeError('Record keys must be strings.')
+        const value = container.value.fields.get(index.value.text)
+        if (!value) throw new RangeError(`Record has no field ${JSON.stringify(index.value.text)}.`)
+        return { value, diagnostics }
+      }
+      if (container.value.kind === 'string') {
+        const characters = Array.from(container.value.text)
+        const offset = scalarInteger(index.value, 'String index')
+        const character = characters.at(offset)
+        if (character === undefined) throw new RangeError('String index is out of range.')
+        return {
+          value: stringValue(character, [...container.value.origins, ...index.value.origins]),
+          diagnostics,
+        }
+      }
       if (container.value.kind !== 'container')
-        throw new TypeError('Indexing requires a container.')
+        throw new TypeError('Indexing requires a container, record, or string.')
       const offset = scalarInteger(index.value, 'Container index')
       const value =
         container.value.values[offset < 0 ? container.value.values.length + offset : offset]

@@ -1,14 +1,17 @@
 import { Fraction } from 'xen-dev-utils/fraction'
 import type { Expression, Node } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
+import { catchableDiagnostic } from '../diagnostics.js'
 import { Value } from '../value.js'
 import {
   evaluateDeclaration,
   evaluateExpression,
+  evaluateThrow,
   isComparison,
   isTruthy,
   preludeEnvironment,
   prepareFunctionCall,
+  stringValue,
 } from './expressions.js'
 import { expandRepeats } from './repeat-expansion.js'
 import { expandHarmonicSegment } from './harmonic-segments.js'
@@ -88,6 +91,7 @@ function resolveContext(resolver: ContextResolver, base: ScoreVisitorContext): S
 type LoopFrame = { jump?: Extract<Expression, { type: 'LoopJump' }>['action'] }
 
 interface VisitorScope {
+  readonly stopOnError?: boolean
   readonly loop?: LoopFrame
   readonly offset: Fraction
   readonly timeScale: Fraction
@@ -1234,7 +1238,7 @@ export function evaluateScoreSemantics(
   const visitBlock = (
     body: Extract<Expression, { type: 'Sequence' }>,
     visitor: ScoreVisitor,
-    deferRepeats = visitor.scope.loop !== undefined,
+    deferRepeats = visitor.scope.loop !== undefined || visitor.scope.stopOnError === true,
   ): ScoreShapeEvaluationResult => {
     spendFlowBudget(body)
     let diagnostics: readonly Diagnostic[] = []
@@ -1429,6 +1433,48 @@ export function evaluateScoreSemantics(
         { ...result, diagnostics: [...condition.diagnostics, ...result.diagnostics] },
         visitorAfter(result, visitor),
       )
+    }
+    if (current.type === 'ThrowStatement')
+      return { diagnostics: evaluateThrow(current, context, environment) }
+    if (current.type === 'ReturnStatement')
+      return {
+        diagnostics: [
+          {
+            code: 'XP_RETURN_SCOPE',
+            severity: 'error',
+            message: 'ret requires an enclosing function body.',
+            locations: [current.location],
+          },
+        ],
+      }
+    if (current.type === 'TryBlock') {
+      const loop = visitor.scope.loop
+      const trialLoop = loop && { ...loop }
+      const scope = visitor.spawn({ loop: trialLoop, stopOnError: true })
+      const trial = visitBlock(current.body, scope, true)
+      if (hasShape(trial)) {
+        if (loop) loop.jump = trialLoop?.jump
+        const completed = restoreBlockScope(trial, scope, visitor)
+        return withVisitor(
+          completed,
+          visitorAfter(completed, visitor).spawn({ loop, stopOnError: visitor.scope.stopOnError }),
+        )
+      }
+      const failure = catchableDiagnostic(trial.diagnostics)
+      if (!failure) return trial
+      const name = current.name
+      const handler = name
+        ? changeVisitor(visitor, (context) => ({
+            ...context,
+            lexicalEnvironment: extendLexicalEnvironment(
+              context.lexicalEnvironment ?? preludeEnvironment(),
+              {
+                variables: new Map([[name.name, stringValue(failure.message, [origin(name)])]]),
+              },
+            ),
+          }))
+        : visitor
+      return restoreBlockScope(visitBlock(current.handler, handler), handler, visitor)
     }
     if (current.type === 'ForBlock') {
       const iterable = evaluateExpression(current.iterable, context, environment)
@@ -1835,11 +1881,21 @@ export function evaluateScoreSemantics(
         | undefined
       const results: ScoreShapeEvaluationResult[] = []
       const loop = visitor.scope.loop
+      let checkedResults = 0
+      const interrupted = () => {
+        if (loop?.jump) return true
+        if (!visitor.scope.stopOnError) return false
+        while (checkedResults < results.length) {
+          if (results[checkedResults++]!.diagnostics.some(({ severity }) => severity === 'error'))
+            return true
+        }
+        return false
+      }
       // Expand a reached repeat in place so one-shot directives can see its
       // items and a jump can still leave later repeats unexpanded.
       const items = function* (): Generator<Expression> {
         for (const item of current.items) {
-          if (loop?.jump) return
+          if (interrupted()) return
           if (playback && item.type === 'Repeat') {
             const expanded = expandBlockRepeats(
               { type: 'Sequence', items: [item], location: item.location },
@@ -1854,7 +1910,7 @@ export function evaluateScoreSemantics(
             }
             if (!expanded.program) return
             for (const child of expanded.program.body as unknown as Expression[]) {
-              if (loop?.jump) return
+              if (interrupted()) return
               yield child
             }
           } else yield item
@@ -2702,10 +2758,16 @@ export function evaluateScoreSemantics(
     lexicalEnvironment: options.lexicalEnvironment,
   }
   const identity: ContextResolver = { cache: new WeakMap() }
-  const visitor: ScoreVisitor = new Visitor(
+  const visitor = new Visitor<Expression, VisitorScope, ScoreShapeEvaluationResult>(
     (current, active) => {
       try {
-        return evaluateNode(current, at(active, active.scope.offset))
+        const result = evaluateNode(current, at(active, active.scope.offset))
+        if (
+          active.scope.stopOnError &&
+          result.diagnostics.some(({ severity }) => severity === 'error')
+        )
+          return { diagnostics: result.diagnostics }
+        return result
       } catch (error) {
         return {
           diagnostics:

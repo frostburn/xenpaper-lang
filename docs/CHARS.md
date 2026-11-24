@@ -37,9 +37,9 @@ context-dependent meanings.
 | U+0030–U+0039  | 0–9      | Scale degrees and numeric literals; identifier continuation                                                                                              |
 | U+003A         | :        | Enumerated-chord separator (`:` or `::`); repeat delimiters `\|:` and `:\|`; named directive argument and MOS hardness separator; articulation shorthand |
 | U+003B         | ;        | Bar rest; context and MOS statement separator                                                                                                            |
-| U+003C         | <        | Assignment arrow `<-`; opens an equal-division equave suffix, mapping, or MOS equave                                                                     |
+| U+003C         | <        | Assignment arrow `<-`; opens an equal-division equave suffix, mapping, or MOS equave; opens a string as `<<`                                             |
 | U+003D         | =        | Note continuation/hold postfix; lambda arrow `=>`                                                                                                        |
-| U+003E         | >        | Closes an equal-division equave suffix, mapping, MOS equave, or monzo (`>@`); binary note tie `->`                                                       |
+| U+003E         | >        | Closes an equal-division equave suffix, mapping, MOS equave, or monzo (`>@`); binary note tie `->`; closes an ASCII-delimited string as `>>`             |
 | U+003F         | ?        | Note-tail elimination; subdivision grace marker                                                                                                          |
 | U+0040         | @        | Directive prefix; MOS chroma-down accidental; monzo subgroup marker; repeat count/ending prefix; articulation shorthand                                  |
 | U+0041         | A        | Latin pitch A; augmented interval quality; identifier                                                                                                    |
@@ -92,6 +92,8 @@ context-dependent meanings.
 | Character code                               | Text        | Usage                                                                                   |
 | -------------------------------------------- | ----------- | --------------------------------------------------------------------------------------- |
 | U+00A2                                       | ¢           | Cents quantity suffix (for example, `700¢`)                                             |
+| U+00AB                                       | «           | Opens a Unicode-delimited string                                                        |
+| U+00BB                                       | »           | Closes a Unicode-delimited string                                                       |
 | U+00B2–U+00B3, U+00B9, U+2070, U+2074–U+2079 | ² ³ ¹ ⁰ ⁴–⁹ | Superscript digits in numerator FJS inflections and repeat-ending numbers               |
 | U+00BD                                       | ½           | Half-integer interval-number suffix (for example, `P4½`)                                |
 | U+02E3                                       | ˣ           | Superscript repeat-count prefix (for example, `\|:ˣ³`)                                  |

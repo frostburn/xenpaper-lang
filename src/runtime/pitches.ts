@@ -478,6 +478,8 @@ export function applyPitchContextChange(
           value.kind === 'undefined' ||
           value.kind === 'container' ||
           value.kind === 'scoreFragment' ||
+          value.kind === 'string' ||
+          value.kind === 'record' ||
           isCallableValue(value)
         )
           throw new TypeError('Degree assignments require pitch intervals.')
