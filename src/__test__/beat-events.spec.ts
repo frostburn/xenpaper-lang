@@ -247,12 +247,18 @@ describe('beat event expansion', () => {
     ['(1 2 3) ==', ['0', '1', '2'], ['1', '1', '3'], '5'],
     ['((1 2) 3)==', ['0', '1', '2'], ['1', '1', '3'], '5'],
     ['(1 2 3)== 4', ['0', '1', '2', '5'], ['1', '1', '3', '1'], '6'],
+    ['let foo <- C== $ foo foo', ['0', '3'], ['3', '3'], '6'],
+    ['let foo <- C== $ @2 foo', ['0'], ['3/2'], '3/2'],
+    ['let foo <- C $ foo <- C== $ foo', ['0'], ['3'], '3'],
     ['let phrase <- (1 2 3) $ phrase==', ['0', '1', '2'], ['1', '1', '3'], '5'],
+    ['let phrase <- (1 2 3)== $ phrase', ['0', '1', '2'], ['1', '1', '3'], '5'],
     ['fn phrase() { ret (1 2 3) } phrase()==', ['0', '1', '2'], ['1', '1', '3'], '5'],
     ['[1 2 3]==', ['0', '1', '2'], ['1', '1', '1'], '3'],
     ['([1 2 3])==', ['0', '1', '2'], ['1', '1', '1'], '3'],
     ['let phrase <- [1 2 3] $ phrase==', ['0', '1', '2'], ['1', '1', '1'], '3'],
+    ['let phrase <- [1 2 3]== $ phrase', ['0', '1', '2'], ['1', '1', '1'], '3'],
     ['(1, 2, 3)==', ['0', '0', '0'], ['3', '3', '3'], '3'],
+    ['let phrase <- (1, 2, 3)== $ phrase', ['0', '0', '0'], ['3', '3', '3'], '3'],
     ['(1, 2 3)=', ['0', '0', '2'], ['2', '2', '2'], '3'],
     ['[0, 4 7]=!', ['0', '0', '1'], ['2', '2', '1'], '2'],
     ['(0, 4 7)=!', ['0', '0', '2'], ['3', '3', '1'], '3'],
@@ -261,6 +267,7 @@ describe('beat event expansion', () => {
     ['(1 2 3)==!', ['0', '1', '2'], ['5', '4', '3'], '5'],
     ['(1 2 3)!=', ['0', '1', '2'], ['4', '3', '2'], '4'],
     ['(1 2 3)=!=', ['0', '1', '2'], ['5', '4', '3'], '5'],
+    ['let phrase <- (1 2 3)=!= $ phrase', ['0', '1', '2'], ['5', '4', '3'], '5'],
   ])('retains continuation timing for %s', (source, starts, durations, totalDuration) => {
     const result = score(source)
     const notes = result.events.filter((event) => event.kind === 'note')
@@ -268,6 +275,18 @@ describe('beat event expansion', () => {
     expect(notes.map((note) => note.start.toFraction())).toEqual(starts)
     expect(notes.map((note) => note.duration.toFraction())).toEqual(durations)
     expect(result.duration.toFraction()).toBe(totalDuration)
+  })
+
+  it('binds a continued note without emitting it', () => {
+    const result = score('let foo <- C==')
+    expect(result.duration.toFraction()).toBe('0')
+    expect(result.events).toEqual([])
+  })
+
+  it('keeps the declared pitch of a continued degree when tuning changes', () => {
+    const result = score('let foo <- 1d== $ {24edo} foo')
+    const notes = result.events.filter((event) => event.kind === 'note')
+    expect(notes.map((note) => note.pitch.value.valueOf())).toEqual([100])
   })
 
   it('does not continue a note across a rest at the end of a group', () => {

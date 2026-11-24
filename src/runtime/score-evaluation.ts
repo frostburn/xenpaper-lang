@@ -2588,13 +2588,21 @@ export function evaluateScoreSemantics(
         const composed: Expression = item.grouped
           ? { type: 'Group', expression, location: current.location }
           : expression
-        return item.normalized
+        const normalized: Expression = item.normalized
           ? {
               type: 'NormalizeToSlot',
               expression: children.length ? composed : null,
               location: current.location,
             }
           : composed
+        return item.postfixMarks
+          ? {
+              type: 'PostfixExpression',
+              expression: normalized,
+              marks: [...item.postfixMarks],
+              location: current.location,
+            }
+          : normalized
       }
       const expression = fragment(value.value)
       const result = changeVisitor(visitor, (context) => ({
