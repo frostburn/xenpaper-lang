@@ -191,6 +191,51 @@ ${builtin}(${parameters} => fail(item), ${arguments_})`
 })
 
 describe('score control flow', () => {
+  it.each([
+    ['if(false @and missing()) { C } else { D }', 'D'],
+    ['if(true @or missing()) { C } else { D }', 'C'],
+    ['if(true @or false @and missing()) { C }', 'C'],
+    ['if(1 @eq 1 @and @not false) { C }', 'C'],
+    ['if(1::2 @or missing()) { C }', 'C'],
+    [
+      'let data <- record { tone: D, text: "a" + "b", nested: record { tone: E } } $ if(data["text"] @eq "ab") { data["tone"] data["nested"]["tone"] }',
+      'D E',
+    ],
+    ['if("a🎶"[-1] @eq "🎶") { C }', 'C'],
+    ['fn choose(test) { if(test) { ret C . D } ret E } $ choose(true) choose(false)', 'C . D E'],
+    ['fn choose() { for(item of [C D]) { ret item } } $ choose()', 'C'],
+    ['fn choose() { while(true) { ret D } } $ choose()', 'D'],
+    ['fn choose() { ret C $ throw("unreachable") } $ choose()', 'C'],
+    ['try { C throw("error") E } catch(message) { if(message @eq "error") { D } } F', 'D F'],
+    ['try { C D } catch { E } F', 'C D F'],
+    ['try { let bad <- 1 / 0 } catch { D }', 'D'],
+    ['try { @2 C throw("error") } catch { D } F', 'D F'],
+    ['try { if(true) { throw("stop") |:@x1000000 C :| } } catch { D }', 'D'],
+    ['let note <- C $ try { note <- E $ throw("error") } catch { note } note', 'C C'],
+    ['let note <- C $ try { note <- D } catch { E } note', 'D'],
+    [
+      'fn choose(note) { try { note <- E $ throw("error") } catch(message) { if(message @eq "error") { ret note } } ret F } $ choose(D)',
+      'D',
+    ],
+    ['fn choose() { try { ret C } catch { ret D } } $ choose()', 'C'],
+    ['for(item of [C D]) { try { item break } catch { E } } F', 'C F'],
+  ])('evaluates data and control flow in %s', (source, expected) => {
+    expect(score(source)).toEqual(score(expected))
+  })
+
+  it.each([
+    ['throw("bad" + " note")', 'XP_THROW'],
+    ['throw(1d)', 'XP_TYPE_MISMATCH'],
+    ['ret C', 'XP_RETURN_SCOPE'],
+    ['try { ret C } catch { D }', 'XP_RETURN_SCOPE'],
+    ['fn choose() { if(false) { ret C } } $ choose()', 'XP_MISSING_RETURN'],
+    ['try { while(true) {} } catch { C }', 'XP_EXPANSION_LIMIT'],
+  ])('keeps unhandled diagnostics for %s', (source, code) => {
+    expect(expandToBeatEvents(parse(source), { expansionLimit: 100 }).diagnostics).toMatchObject([
+      { code },
+    ])
+  })
+
   it('updates an existing binding without moving the score cursor', () => {
     expect(score('let note <- C $ note $ note <- D $ note')).toEqual(score('C D'))
     expect(expandToBeatEvents(parse('missingName <- C')).diagnostics[0]).toMatchObject({

@@ -67,6 +67,10 @@ export type Expression =
   | Repeat
   | WhileBlock
   | Rest
+  | ReturnStatement
+  | RecordLiteral
+  | StringLiteral
+  | TryBlock
   | Sequence
   | SignatureDeclaration
   | TailElimination
@@ -197,13 +201,41 @@ export interface BindingAssignment extends Node {
 
 export interface ThrowStatement extends Node {
   type: 'ThrowStatement'
-  message: string
+  message: Expression
+}
+
+export interface TryBlock extends Node {
+  type: 'TryBlock'
+  body: Sequence
+  name: Identifier | null
+  handler: Sequence
+}
+
+export interface StringLiteral extends Node {
+  type: 'StringLiteral'
+  value: string
+}
+
+export interface RecordEntry extends Node {
+  type: 'RecordEntry'
+  key: RecordKey
+  value: Expression
+}
+
+export interface RecordKey extends Node {
+  type: 'RecordKey'
+  value: string
+}
+
+export interface RecordLiteral extends Node {
+  type: 'RecordLiteral'
+  entries: RecordEntry[]
 }
 
 export interface FunctionBody extends Node {
   type: 'FunctionBody'
   statements: Expression[]
-  returnStatement: ReturnStatement
+  returnStatement: ReturnStatement | null
 }
 
 export interface ReturnStatement extends Node {

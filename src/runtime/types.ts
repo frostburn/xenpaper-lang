@@ -274,6 +274,20 @@ export interface UndefinedValue {
   readonly origins: readonly SourceOrigin[]
 }
 
+export interface StringValue {
+  readonly kind: 'string'
+  readonly text: string
+  readonly value: Value
+  readonly origins: readonly SourceOrigin[]
+}
+
+export interface RecordValue {
+  readonly kind: 'record'
+  readonly fields: ReadonlyMap<string, EvaluatedLiteral>
+  readonly value: Value
+  readonly origins: readonly SourceOrigin[]
+}
+
 /** A lexically captured anonymous function. */
 export interface LambdaValue {
   readonly kind: 'lambda'
@@ -398,6 +412,8 @@ export type EvaluatedLiteral =
   | ContainerValue
   | ScoreFragmentValue
   | UndefinedValue
+  | StringValue
+  | RecordValue
   | CallableValue
 
 /** Renderer-independent description of a note on a treble/bass staff. */

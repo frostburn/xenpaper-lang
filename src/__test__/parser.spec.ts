@@ -207,8 +207,8 @@ describe('lexical declarations', () => {
       body: { returnStatement: { value: { type: 'Sequence' } } },
     })
     if (declaration.type !== 'FunctionDeclaration') throw new Error('Expected function.')
-    const returned = declaration.body.returnStatement.value
-    if (returned.type !== 'Sequence') throw new Error('Expected returned sequence.')
+    const returned = declaration.body.returnStatement?.value
+    if (returned?.type !== 'Sequence') throw new Error('Expected returned sequence.')
     expect(returned.items.slice(0, 3)).toMatchObject([
       { type: 'Directive', name: 'subdivision' },
       { type: 'PitchLiteral', raw: 'D' },
@@ -832,6 +832,19 @@ describe('Xenpaper surface grammar', () => {
       { type: 'Comment', raw: '# one # comment', value: ' one # comment' },
     ])
     expect(program.comments[0]!.location.start.offset).toBe(8)
+  })
+
+  it('keeps hashes in record keys and strings out of the comment list', () => {
+    expect(parse('let data <- record { "#key": "#value" } # real comment').comments).toMatchObject([
+      { raw: '# real comment' },
+    ])
+  })
+
+  it('keeps adjacent double-equave modifiers attached to their notes', () => {
+    expect(parse('"C "D').body[0]).toMatchObject({
+      type: 'Sequence',
+      items: [{ type: 'PitchModifierExpression' }, { type: 'PitchModifierExpression' }],
+    })
   })
 
   it('collects syntax hashes once for sharp-heavy sources', () => {

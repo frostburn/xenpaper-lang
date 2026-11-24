@@ -73,6 +73,8 @@ export type {
   FrequencyPitchValue,
   PitchAutomation,
   EvaluatedLiteral,
+  StringValue,
+  RecordValue,
   CallableValue,
   FunctionValue,
   LambdaValue,
