@@ -90,13 +90,13 @@ export interface ScoreShapeOptions extends RepeatExpansionOptions {
   readonly lexicalEnvironment?: LexicalEnvironment
 }
 
-/** Persistent lexical scope. Variables and callables intentionally occupy separate namespaces. */
+/** Persistent lexical scope. Definitions and assignable variables use separate maps. */
 export interface LexicalEnvironment {
   readonly parent?: LexicalEnvironment
   readonly variables: ReadonlyMap<string, EvaluatedLiteral>
   readonly functions: ReadonlyMap<string, FunctionDefinition>
   /** Definition identities currently being invoked, used to diagnose prohibited recursion. */
-  readonly calls: ReadonlySet<FunctionDefinition>
+  readonly calls: ReadonlySet<FunctionDefinition | symbol>
   readonly functionBudget?: { remaining: number }
 }
 
@@ -118,7 +118,7 @@ export function extendLexicalEnvironment(
   additions: {
     readonly variables?: ReadonlyMap<string, EvaluatedLiteral>
     readonly functions?: ReadonlyMap<string, FunctionDefinition>
-    readonly calls?: ReadonlySet<FunctionDefinition>
+    readonly calls?: LexicalEnvironment['calls']
     readonly functionBudget?: { remaining: number }
   },
 ): LexicalEnvironment {
@@ -274,14 +274,34 @@ export interface UndefinedValue {
   readonly origins: readonly SourceOrigin[]
 }
 
-/** Lexically captured anonymous function used by higher-order container helpers. */
+/** A lexically captured anonymous function. */
 export interface LambdaValue {
   readonly kind: 'lambda'
+  readonly identity: symbol
   readonly parameters: readonly string[]
   readonly body: Expression
   readonly environment: LexicalEnvironment
   readonly value: Value
   readonly origins: readonly SourceOrigin[]
+}
+
+export interface FunctionValue {
+  readonly kind: 'function'
+  readonly definition: FunctionDefinition
+  readonly value: Value
+  readonly origins: readonly SourceOrigin[]
+}
+
+export type CallableValue = FunctionValue | LambdaValue
+
+export function isCallableValue(value: EvaluatedLiteral | undefined): value is CallableValue {
+  return value?.kind === 'function' || value?.kind === 'lambda'
+}
+
+export function callableArity(callable: CallableValue): readonly [number, number] {
+  if (callable.kind === 'lambda') return [callable.parameters.length, callable.parameters.length]
+  const { parameters } = callable.definition
+  return [parameters.filter((parameter) => !parameter.defaultValue).length, parameters.length]
 }
 
 export type PrimeMonzo = ReadonlyMap<number, Fraction>
@@ -378,7 +398,7 @@ export type EvaluatedLiteral =
   | ContainerValue
   | ScoreFragmentValue
   | UndefinedValue
-  | LambdaValue
+  | CallableValue
 
 /** Renderer-independent description of a note on a treble/bass staff. */
 export interface StaffPitch {

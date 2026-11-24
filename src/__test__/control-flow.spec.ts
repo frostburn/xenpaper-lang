@@ -84,6 +84,65 @@ describe('comparison expressions', () => {
 
 describe('higher-order calls', () => {
   it.each([
+    ['let step <- (item) => item + 1d $ step(1d)', '2d'],
+    ['let phrase <- (item) => (item . C) $ phrase(D)', 'D . C'],
+    [
+      'fn shift(item, interval: ratio <- 3/2) { ret item + interval } $ let alias <- shift $ alias(C)',
+      'G',
+    ],
+    [
+      'fn apply(callback, item) { ret callback(item) } $ fn keep(item) { ret item } $ apply(keep, D)',
+      'D',
+    ],
+    [
+      'fn shift(item, interval: ratio <- 3/2) { ret item + interval } $ arrayMap(shift, [C D])',
+      '[G A]',
+    ],
+    ['fn ornament(item) { ret item . C } $ arrayMap(ornament, (D E))', 'D . C E . C'],
+    [
+      'fn sum(total: ratio, item: ratio) { ret total + item } $ let total <- arrayReduce(sum, [1/1 2/1 3/1], 0/1) $ if(total @eq 6) { C }',
+      'C',
+    ],
+  ])('passes and plays functions in %s', (source, expected) => {
+    expect(score(source)).toEqual(score(expected))
+  })
+
+  it('keeps distinct closures from the same lambda expression callable', () => {
+    const source = `fn wrap(callback) { ret (item) => callback(item) }
+let keep <- (item) => item
+let wrapped <- wrap(wrap(keep))
+wrapped(C)`
+    expect(score(source)).toEqual(score('C'))
+  })
+
+  it('returns a named function with its enclosing parameters', () => {
+    const source = `fn make(interval: ratio) {
+  fn shift(item) { ret item + interval }
+  ret shift
+}
+let shift <- make(3/2)
+arrayMap(shift, [C D])`
+    expect(score(source)).toEqual(score('[G A]'))
+  })
+
+  it.each([
+    'let runner <- (next) => next(next) $ runner(runner)',
+    'fn runner() { ret runner() } $ let alias <- runner $ alias()',
+    'fn runner(item) { ret arrayMap(runner, [item]) } $ runner(C)',
+  ])('guards recursion through a function value in %s', (source) => {
+    expect(expandToBeatEvents(parse(source)).diagnostics).toMatchObject([{ code: 'XP_RECURSION' }])
+  })
+
+  it('checks callable arity and respects lexical shadowing', () => {
+    for (const [source, code] of [
+      ['let keep <- (item) => item $ keep()', 'XP_ARITY'],
+      ['fn keep(item) { ret item } $ let keep <- C $ keep(D)', 'XP_NOT_CALLABLE'],
+      ['fn keep(item) { ret item } $ keep', 'XP_TYPE_MISMATCH'],
+    ] as const)
+      expect(expandToBeatEvents(parse(source)).diagnostics).toMatchObject([{ code }])
+  })
+
+  it.each([
     ['arrayMap', '(item)', '[callback]'],
     ['arrayReduce', '(item, following)', '[callback callback]'],
   ])('keeps the recursion guard active inside %s', (builtin, parameters, arguments_) => {

@@ -27,6 +27,7 @@ import type {
   SourceOrigin,
   LexicalEnvironment,
 } from './types.js'
+import { isCallableValue } from './types.js'
 import { parseVal, valMapping } from './val.js'
 import { equaveShift, equaveShifts } from './pitch-modifiers.js'
 
@@ -476,7 +477,8 @@ export function applyPitchContextChange(
         if (
           value.kind === 'undefined' ||
           value.kind === 'container' ||
-          value.kind === 'scoreFragment'
+          value.kind === 'scoreFragment' ||
+          isCallableValue(value)
         )
           throw new TypeError('Degree assignments require pitch intervals.')
         return value.kind === 'pitchOffset' ? value.value : Value.pitch(value.value)

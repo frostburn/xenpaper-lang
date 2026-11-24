@@ -17,7 +17,7 @@ import { DYNAMIC_VELOCITIES, resolveDirective } from './directives.js'
 import { Visitor, type VisitorEvaluation } from './visitor.js'
 import { contextAt } from './initialization.js'
 import { materializeScoreContinuations, tieScoreShapes } from './ties.js'
-import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment } from './types.js'
+import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment, isCallableValue } from './types.js'
 import {
   DEFAULT_PITCH_CONTEXT,
   applyPitchContextChange,
@@ -972,6 +972,18 @@ function playablePitch(
     }
   | { readonly diagnostics: readonly Diagnostic[] } {
   if (!('value' in evaluated)) return evaluated
+  if (isCallableValue(evaluated.value))
+    return {
+      diagnostics: [
+        ...evaluated.diagnostics,
+        {
+          code: 'XP_TYPE_MISMATCH',
+          severity: 'error',
+          message: 'Call the function to play its result.',
+          locations: [node.location],
+        },
+      ],
+    }
   if (evaluated.value.kind === 'pitchOffset') {
     return {
       pitch: {
