@@ -77,34 +77,28 @@
 }
 
 Start
-  = Spacing body:DocumentBody? Spacing !. {
+  = Spacing body:DocumentBody Spacing !. {
       const source = text();
       return node('Program', {
         source,
-        body: body ?? [],
+        body,
         comments: [],
       });
     }
 
 DocumentBody
-  = first:ScopedParallelExpression?
-    rest:(Spacing boundary:StatementBoundary Spacing next:ScopedParallelExpression? {
-      return { boundary, next };
+  = first:DocumentSection
+    rest:(Spacing boundary:HardBoundary Spacing next:DocumentSection {
+      return [boundary, ...next];
     })* {
-      const body = [];
-      if (first) body.push(first);
-      for (const part of rest) {
-        if (part.boundary) body.push(part.boundary);
-        if (part.next) body.push(part.next);
-      }
-      return body;
+      return [first, ...rest].flat();
     }
 
-StatementBoundary
-  = HardBoundary / (StatementDelimiter { return null; })
+DocumentSection
+  = StatementSeparators? body:ScopedScoreList? { return body ?? []; }
 
 StatementDelimiter
-  = "$"
+  = "$" { return null; }
 
 ParallelExpression
   = first:SequenceExpression
@@ -153,13 +147,18 @@ ScopedSequenceExpression
 StatementSeparators
   = (Spacing StatementDelimiter)+ Spacing
 
-GroupedScore
+ScopedScoreList
   = first:ScopedParallelExpression
-    rest:(StatementSeparators item:ScopedParallelExpression { return item; })*
+    rest:(StatementSeparators @ScopedParallelExpression)*
     StatementSeparators? {
-      if (!rest.length) return first;
-      const items = [first, ...rest].flatMap(item => item.type === 'Sequence' ? item.items : [item]);
-      return sequence(items, { ...first.location, end: items.at(-1).location.end });
+      return [first, ...rest];
+    }
+
+GroupedScore
+  = body:ScopedScoreList {
+      if (body.length === 1) return body[0];
+      const items = body.flatMap(item => item.type === 'Sequence' ? item.items : [item]);
+      return sequence(items, { ...body[0].location, end: items.at(-1).location.end });
     }
 
 // Scale assignments use the ordinary sequence and parallel grammar, except
@@ -482,10 +481,10 @@ HardBoundary
   = "||" { return node('HardBoundary', { raw: "||" }); }
 
 RepeatExpression
-  = "|:" Spacing count:RepeatCount? Spacing body:RepeatBody? result:RepeatEndings {
+  = "|:" Spacing count:RepeatCount? Spacing body:RepeatBody result:RepeatEndings {
       return node('Repeat', {
         count,
-        body: body ?? [],
+        body,
         endings: result.endings,
         terminal: result.terminal,
         incompleteEndings: result.incomplete,
@@ -493,26 +492,21 @@ RepeatExpression
     }
 
 RepeatEndings
-  = Spacing first:FirstEndingMarker Spacing firstBody:EndingBody
-    rest:(Spacing marker:NextEndingMarker Spacing body:EndingBody {
-      return { ...marker, body };
-    })*
-    Spacing terminal:("||" / "|" / !. { return null; }) {
-      return { endings: [{ ...first, body: firstBody }, ...rest], terminal, incomplete: false };
-    }
-  / Spacing first:FirstEndingMarker Spacing firstBody:EndingBody
-    Spacing terminal:":|" {
-      return {
-        endings: [{ ...first, body: firstBody }],
-        terminal,
-        incomplete: true,
-      };
+  = Spacing first:FirstEndingMarker Spacing firstBody:EndingBody tail:(
+      rest:(Spacing marker:NextEndingMarker Spacing body:EndingBody { return { ...marker, body }; })*
+      Spacing terminal:("||" / "|" / !. { return null; }) {
+        return { rest, terminal, incomplete: false };
+      }
+      / Spacing terminal:":|" { return { rest: [], terminal, incomplete: true }; }
+    ) {
+      const { rest, terminal, incomplete } = tail;
+      return { endings: [{ ...first, body: firstBody }, ...rest], terminal, incomplete };
     }
   / Spacing ":|" { return { endings: [], terminal: ":|", incomplete: false }; }
 
 EndingBody
   = first:EndingParallelExpression?
-    rest:(Spacing StatementDelimiter Spacing next:EndingParallelExpression? { return next; })* {
+    rest:(StatementSeparators @EndingParallelExpression?)* {
       return [first, ...rest].filter(Boolean);
     }
 
@@ -556,16 +550,8 @@ EndingNumber
 
 RepeatBody
   = first:ParallelExpression?
-    rest:(Spacing boundary:StatementBoundary Spacing next:ParallelExpression? {
-      return { boundary, next };
-    })* {
-      const body = [];
-      if (first) body.push(first);
-      for (const part of rest) {
-        if (part.boundary) body.push(part.boundary);
-        if (part.next) body.push(part.next);
-      }
-      return body;
+    rest:(Spacing @(HardBoundary / StatementDelimiter) Spacing @ParallelExpression?)* {
+      return [first, ...rest.flat()].filter(Boolean);
     }
 
 RepeatCount
