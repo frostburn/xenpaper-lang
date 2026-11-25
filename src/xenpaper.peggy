@@ -270,7 +270,9 @@ MultiplicativeOperator
   = "/_" { return "/_"; }
   / "*" { return "*"; }
   / "div"i !IdentifierContinue { return "div"; }
+  / "modc"i !IdentifierContinue { return "modc"; }
   / "mod"i !IdentifierContinue { return "mod"; }
+  / "rdc"i !IdentifierContinue { return "rdc"; }
   / "rd"i !IdentifierContinue { return "rd"; }
 
 PowerExpression

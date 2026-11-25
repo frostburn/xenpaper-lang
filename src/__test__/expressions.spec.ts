@@ -221,6 +221,54 @@ describe('arithmetic expression evaluation', () => {
     expect(evaluate('2 rd 3/2').value.equals(new Fraction(4, 3))).toBe(true)
   })
 
+  it.each([
+    ['0 modc 3', 3],
+    ['-6 modc 3', 3],
+    ['7 modc 3', 1],
+    ['-7 modc 3', 2],
+    ['7/2 modc 3/2', new Fraction(1, 2)],
+    ['1 rdc 2', 2],
+    ['4 rdc 2', 2],
+    ['1/4 rdc 2', 2],
+    ['5 rdc 2', new Fraction(5, 4)],
+    ['3/4 rdc 2', new Fraction(3, 2)],
+  ])('evaluates %s exactly', (source, expected) => {
+    expect(evaluate(source).value.strictEquals(expected)).toBe(true)
+  })
+
+  it.each([
+    ['modc', '6/1', '3/1', 3],
+    ['modc', '7/1', '3/1', 1],
+    ['rd', '9/4', '3/2', 1],
+    ['rd', '7/4', '3/2', new Fraction(7, 6)],
+    ['rdc', '9/4', '3/2', new Fraction(3, 2)],
+    ['rdc', '7/4', '3/2', new Fraction(7, 6)],
+  ])('broadcasts %s with operands %s and %s', (operator, left, right, expected) => {
+    expect(evaluate(`${left} ${operator} ${right}`).value.strictEquals(expected)).toBe(true)
+    for (const source of [
+      `[${left}] ${operator} ${right}`,
+      `${left} ${operator} [${right}]`,
+      `[${left}] ${operator} [${right}]`,
+    ]) {
+      const reduced = evaluate(source)
+      if (reduced.kind !== 'container') throw new Error('Expected a container.')
+      expect(reduced.values).toHaveLength(1)
+      expect(reduced.values[0]!.kind).toBe('scalar')
+      expect(reduced.values[0]!.value.strictEquals(expected)).toBe(true)
+    }
+  })
+
+  it.each(['MODC', 'RDC'])('parses %s at multiplicative precedence', (operator) => {
+    expect(evaluate(`1 + 3 ** 2 ${operator} 3 * 2`).value.strictEquals(7)).toBe(true)
+  })
+
+  it('applies ceiling modulo to pitch offsets and unitful quantities', () => {
+    const pitch = evaluate('P8 modc P8')
+    expect(pitch.kind).toBe('pitchOffset')
+    expect(pitch.value.strictEquals(Value.cents(1200))).toBe(true)
+    expect(evaluate('4s modc 2s').value.strictEquals(Value.seconds(2))).toBe(true)
+  })
+
   it('supports division in the pitch domain and logarithmic division for ratios', () => {
     expect(evaluate('M3 / M2').value.equals(2)).toBe(true)
     expect(evaluate('81/64 /_ 9/8').value.equals(2)).toBe(true)
@@ -416,6 +464,12 @@ describe('arithmetic expression evaluation', () => {
       [2n, 1n],
       [3n, 2n],
       [2n, 1n],
+    ])
+    expectRatios('equaveReduce([1/1, 9/4, 7/4, 3/2])', [
+      [3n, 2n],
+      [3n, 2n],
+      [7n, 6n],
+      [3n, 2n],
     ])
     expectRatios('cps([1/1, 3/1, 5/1, 7/1], 2/1)', [
       [7n, 6n],
@@ -687,6 +741,9 @@ fn countOdds(limit: integer) {
       diagnostics: [{ code: 'XP_TYPE_MISMATCH' }],
     })
     expect(evaluateExpression(expression('1 mod 0'))).toMatchObject({
+      diagnostics: [{ code: 'XP_DIVISION_BY_ZERO' }],
+    })
+    expect(evaluateExpression(expression('1 modc 0'))).toMatchObject({
       diagnostics: [{ code: 'XP_DIVISION_BY_ZERO' }],
     })
     expect(evaluateExpression(expression('1.0r / 0.0r'))).toMatchObject({

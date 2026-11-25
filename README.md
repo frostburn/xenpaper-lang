@@ -197,6 +197,12 @@ ratio to a pitch displacement, `ratio(offset)` for the inverse conversion, and
 `sqrt(quantity)` for a square root. `sqrt()` retains an exact monomial when the
 value model is closed under the operation and halves the quantity's dimensions.
 The built-in identifier `pi` evaluates to the dimensionless real constant π.
+
+For a positive modulus `m`, `mod` wraps to `[0, m)` and `modc` wraps to
+`(0, m]`. For positive ratios and an equave `e` greater than one, `rd` wraps
+to `[1, e)` and `rdc` wraps to `(1, e]`. All four operators apply elementwise
+to containers.
+
 Built-in calls use the same contextual coercions as annotated function
 parameters: a bare integer passed to `pitch()` is a scalar ratio, one passed to
 `ratio()` is a scale degree, and the combination count in `kCombinations()` is
