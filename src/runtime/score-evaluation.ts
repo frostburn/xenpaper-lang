@@ -1,5 +1,5 @@
 import { Fraction } from 'xen-dev-utils/fraction'
-import type { Expression, Node, Repeat } from '../parser.generated.js'
+import type { Expression, Node } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
 import { catchableDiagnostic, EvaluationError } from '../diagnostics.js'
 import { isPositiveRationalRatio, Value } from '../value.js'
@@ -7,7 +7,6 @@ import {
   evaluateDeclaration,
   evaluateExpression,
   evaluateThrow,
-  isComparison,
   isTruthy,
   preludeEnvironment,
   evaluateFunctionCall,
@@ -18,7 +17,11 @@ import {
   repeatBoundaryLocation,
   resolveRepeatChain,
 } from './repeat-expansion.js'
-import { expandHarmonicSegment } from './harmonic-segments.js'
+import {
+  broadcastScalarOperation,
+  expandEnumeratedChord,
+  type ScoreExpression,
+} from './score-operations.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { DYNAMIC_VELOCITIES, resolveDirective } from './directives.js'
 import { Visitor, type VisitorEvaluation } from './visitor.js'
@@ -129,10 +132,6 @@ interface VisitorScope {
   readonly environment?: LexicalEnvironment
 }
 
-type ScoreExpression = Expression & {
-  readonly expansionPath?: ExpansionPath
-  readonly broadcastArticulation?: Fraction
-}
 type ScoreVisitor = Visitor<ScoreExpression, VisitorScope, ScoreShapeEvaluationResult>
 
 function withOccurrence(shape: ScoreShape, visitor: ScoreVisitor): ScoreShape {
@@ -142,13 +141,6 @@ function withOccurrence(shape: ScoreShape, visitor: ScoreVisitor): ScoreShape {
 
 const MAX_REPEAT_EXPANSION_NODES = 100_000
 
-type BroadcastScalar = {
-  expression: Expression
-  articulation: Fraction
-  continuations: Extract<Expression, { type: 'PostfixExpression' }>['marks']
-}
-
-/** Unwrap a single pitch expression together with the performance context authored around it. */
 function repeatCount(node: Extract<Expression, { type: 'Repeat' }>): number | undefined {
   let count: bigint
   try {
@@ -285,6 +277,83 @@ function pad(shape: ScoreShape, duration: Fraction): ScoreShape {
   const missing = duration.sub(shape.duration)
   if (!missing.n) return shape
   return sequence([shape, generatedRest(missing)], shape.origins)
+}
+
+function mapAttacks(shape: ScoreShape, update: (attack: AttackShape) => AttackShape): ScoreShape {
+  switch (shape.kind) {
+    case 'attack':
+      return update(shape)
+    case 'sequence':
+      return { ...shape, children: shape.children.map((child) => mapAttacks(child, update)) }
+    case 'parallel':
+      return { ...shape, branches: shape.branches.map((branch) => mapAttacks(branch, update)) }
+    default:
+      return shape
+  }
+}
+
+function scaleShape(shape: ScoreShape, factor: Fraction): ScoreShape {
+  const duration = shape.duration.mul(factor)
+  switch (shape.kind) {
+    case 'sequence':
+      return {
+        ...shape,
+        duration,
+        children: shape.children.map((child) => scaleShape(child, factor)),
+      }
+    case 'parallel':
+      return {
+        ...shape,
+        duration,
+        branches: shape.branches.map((branch) => scaleShape(branch, factor)),
+      }
+    default:
+      return { ...shape, duration }
+  }
+}
+
+function resizeShape(shape: ScoreShape, duration: Fraction): ScoreShape {
+  if (shape.duration.n) return scaleShape(shape, duration.div(shape.duration))
+  if (shape.kind === 'parallel')
+    return {
+      ...shape,
+      duration,
+      branches: shape.branches.map((branch) => resizeShape(branch, duration)),
+    }
+  if (shape.kind === 'sequence') {
+    // A grace group may have been cut all the way to zero. Its first sounding
+    // item takes the grace span, and the rest keep their coincident onsets.
+    const first = shape.children.findIndex((child) => attacks(child).length)
+    return {
+      ...shape,
+      duration,
+      children: shape.children.map((child, index) =>
+        index === first ? resizeShape(child, duration) : child,
+      ),
+    }
+  }
+  return { ...shape, duration }
+}
+
+/** Clip each written slot, including sounds that extend past the enclosing slot. */
+function trimShape(shape: ScoreShape, cutoff: Fraction): ScoreShape {
+  const duration = shape.duration.compare(cutoff) <= 0 ? shape.duration : cutoff
+  if (shape.kind === 'parallel')
+    return {
+      ...shape,
+      duration,
+      branches: shape.branches.map((branch) => trimShape(branch, duration)),
+    }
+  if (shape.kind === 'sequence') {
+    let remaining = duration
+    const children = shape.children.map((child) => {
+      const kept = trimShape(child, remaining)
+      remaining = remaining.sub(kept.duration)
+      return kept
+    })
+    return { ...shape, duration, children }
+  }
+  return { ...shape, duration }
 }
 
 type PitchTree =

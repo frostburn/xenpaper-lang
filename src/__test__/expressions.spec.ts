@@ -25,6 +25,23 @@ function evaluate(source: string) {
 }
 
 describe('arithmetic expression evaluation', () => {
+  it('consults a custom prime mapping only when the expression needs it', () => {
+    const mapping = {
+      id: 'unmapped',
+      mapPrime() {
+        throw new Error('Prime unavailable.')
+      },
+    }
+    const scalar = evaluateExpression(expression('sqrt(4)'), mapping)
+    expect(scalar.diagnostics).toEqual([])
+    expect('value' in scalar && scalar.value.value.equals(2)).toBe(true)
+
+    const degree = expression('1d')
+    expect(evaluateExpression(degree, mapping).diagnostics).toMatchObject([
+      { code: 'XP_TYPE_MISMATCH', message: 'Prime unavailable.', locations: [degree.location] },
+    ])
+  })
+
   it('coerces tuned pitches for ratio-taking built-ins', () => {
     expect(evaluate('pitch(2d)').value.equals(evaluate('2d').value)).toBe(true)
     expect(evaluate('pitch((2d))').value.equals(evaluate('2d').value)).toBe(true)
@@ -156,6 +173,12 @@ describe('arithmetic expression evaluation', () => {
     if (!('value' in tempered)) throw new Error('Expected a value.')
     expect(tempered.value.kind).toBe('pitchOffset')
     expect(tempered.value.value.equals(Value.cents(400))).toBe(true)
+    expect(tempered.value).toMatchObject({
+      formula: new Map([
+        [2, new Fraction(-6)],
+        [3, new Fraction(4)],
+      ]),
+    })
 
     const radical = evaluateExpression(expression('~sqrt(2)'), edoMapping(12))
     expect(radical.diagnostics).toEqual([])

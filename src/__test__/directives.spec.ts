@@ -213,6 +213,17 @@ describe('directive runtime', () => {
     expect(notes('@4? C? D').map((event) => event.duration.valueOf())).toEqual([0.25, 0.75])
   })
 
+  it('gives the first attack of a fully trimmed grace group its allotted time', () => {
+    const events = notes('@4? [C D]? E')
+    expect(
+      events.map((event) => [event.label, event.start.toFraction(), event.duration.toFraction()]),
+    ).toEqual([
+      ['C', '0', '1/4'],
+      ['D', '1/4', '0'],
+      ['E', '1/4', '3/4'],
+    ])
+  })
+
   it('resolves dynamics and consumes velocity once', () => {
     const events = notes('@p C @velocity(80%) D E')
     expect(events.map(({ dynamic }) => dynamic.valueOf())).toEqual([0.3, 0.8, 0.3])
