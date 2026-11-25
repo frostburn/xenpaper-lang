@@ -64,7 +64,7 @@ fn prod(factors: container) { ret arrayReduce((total, element) => total * ratio(
 fn ground(scale: container) { ret scale - pitch(scale[0]) }
 fn equaveReduce(scale: container, equave: ratio <- niente) {
   let actualEquave <- equave al scale[-1]
-  ret ratio(scale) rd ratio(actualEquave)
+  ret ratio(scale) rdc ratio(actualEquave)
 }
 fn cps(factors: container<ratio>, count: integer, equave: ratio <- niente, withUnity: boolean <- false) {
   let products <- sorted(arrayMap((combination) => prod(combination), kCombinations(factors, count)))
@@ -726,12 +726,14 @@ function multiplyOrDivide(
 function modulo(
   left: EvaluatedLiteral,
   right: EvaluatedLiteral,
+  ceiling: boolean,
   node: Expression,
 ): EvaluatedLiteral {
   if (left.kind === 'absolutePitch' || right.kind === 'absolutePitch') {
     throw new TypeError('Modulo does not support absolute pitches.')
   }
-  const value = left.value.mmod(right.value)
+  const remainder = left.value.mmod(right.value)
+  const value = ceiling && remainder.isZero() ? right.value : remainder
   if (left.kind === 'pitchOffset' || right.kind === 'pitchOffset') {
     const difference = addOrSubtract(left, right, true, node)
     if (difference.kind === 'pitchOffset' && difference.value.equals(value)) return difference
@@ -743,12 +745,15 @@ function modulo(
 function geometricModulo(
   left: EvaluatedLiteral,
   right: EvaluatedLiteral,
+  ceiling: boolean,
   node: Expression,
 ): EvaluatedLiteral {
   if (left.kind !== 'scalar' || right.kind !== 'scalar') {
     throw new TypeError('Geometric modulo requires ratio operands.')
   }
-  return result('scalar', left.value.reduce(right.value), operatorOrigins(left, right, node))
+  const reduced = left.value.reduce(right.value)
+  const value = ceiling && reduced.equals(1) ? right.value : reduced
+  return result('scalar', value, operatorOrigins(left, right, node))
 }
 
 function logarithmicDivision(
@@ -840,20 +845,11 @@ function binary(
     const scalar = left.kind === 'container' ? right : left
     return {
       ...container,
-      values: container.values.map((value) => {
-        const reduced =
-          left.kind === 'container'
-            ? binary(operator, value, scalar, node)
-            : binary(operator, scalar, value, node)
-        if (
-          operator === 'rd' &&
-          reduced.kind === 'scalar' &&
-          reduced.value.equals(new Value(1)) &&
-          scalar.kind === 'scalar'
-        )
-          return scalar
-        return reduced
-      }),
+      values: container.values.map((value) =>
+        left.kind === 'container'
+          ? binary(operator, value, scalar, node)
+          : binary(operator, scalar, value, node),
+      ),
     }
   }
   if (
@@ -880,9 +876,11 @@ function binary(
     case 'div':
       return multiplyOrDivide(left, right, true, node)
     case 'mod':
-      return modulo(left, right, node)
+    case 'modc':
+      return modulo(left, right, operator === 'modc', node)
     case 'rd':
-      return geometricModulo(left, right, node)
+    case 'rdc':
+      return geometricModulo(left, right, operator === 'rdc', node)
     case '/_':
       return logarithmicDivision(left, right, node)
     case '**': {
