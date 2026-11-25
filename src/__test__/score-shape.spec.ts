@@ -382,6 +382,27 @@ K L M N j k=`) as SequenceShape
     })
   })
 
+  it.each(['{12edo}', 'MOS{5L2s <5/1>}'])(
+    'uses a stored MOS configuration for pitch modifiers after %s',
+    (tuning) => {
+      const score = shape(
+        `MOS{5L2s <3/1>; ^ <- 150c} let tone <- J $ let step <- P0ms $ let difference <- J - J
+${tuning} 'tone ^tone 'step ^step 'difference ^difference`,
+      ) as SequenceShape
+      const attacks = score.children.filter((child) => child.kind === 'attack')
+      const equave = Value.pitch(new Value(3))
+      expect(attacks).toHaveLength(6)
+      for (const [index, attack] of attacks.entries()) {
+        expect(attack.pitch.value.equals(index % 2 ? Value.cents(150) : equave)).toBe(true)
+      }
+      expect(attacks[0]!.pitch).toMatchObject({
+        kind: 'absolutePitch',
+        formula: new Map([[3, new Fraction(1)]]),
+        mos: { rank: 7 },
+      })
+    },
+  )
+
   it('aligns MOS and conventional nominal groups through root associations', () => {
     const score = shape(`MOS{5L2s 5|1; L<-9/8} {K as root} J K L M
 {D as root} C D E F`) as SequenceShape
@@ -1309,6 +1330,28 @@ K L M N j k=`) as SequenceShape
     expect(shape('[]')).toMatchObject({ kind: 'rest', generated: false })
     expect(shape('[]').duration.equals(1)).toBe(true)
   })
+
+  it.each(['^(C [] E)', 'M2 + (C [] E)', '(C [] E) - (D [] F)'])(
+    'preserves the authored empty slot when applying score arithmetic to %s',
+    (source) => {
+      const result = shape(source)
+      const start = source.indexOf('[]')
+      expect(result.duration.equals(3)).toBe(true)
+      expect(result).toMatchObject({
+        kind: 'sequence',
+        children: [
+          { kind: 'attack' },
+          {
+            kind: 'rest',
+            duration: new Fraction(1),
+            generated: false,
+            origins: [{ location: { start: { offset: start }, end: { offset: start + 2 } } }],
+          },
+          { kind: 'attack' },
+        ],
+      })
+    },
+  )
 
   it('uses the cluster length as the authored rest duration', () => {
     expect(shape('..')).toMatchObject({ kind: 'rest', generated: false })

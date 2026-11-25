@@ -238,6 +238,8 @@ export interface PitchOffsetValue {
   readonly scaleDegree?: number
   /** Modifiers on a degree that can be resolved again in a new tuning. */
   readonly degreeModifiers?: readonly string[]
+  /** Configuration used by pitch modifiers on a Diamond-MOS interval. */
+  readonly mosContext?: MosContext
   readonly origins: readonly SourceOrigin[]
 }
 
@@ -247,7 +249,7 @@ export interface AbsolutePitchValue {
   readonly formula: PrimeMonzo
   readonly spelling: PitchSpelling
   readonly origins: readonly SourceOrigin[]
-  /** Diamond-MOS ordinal and configuration retained for named pitch subtraction. */
+  /** Diamond-MOS ordinal and configuration retained for pitch arithmetic and notation. */
   readonly mos?: {
     readonly rank: number
     readonly context: MosContext

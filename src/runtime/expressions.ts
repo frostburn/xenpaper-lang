@@ -1,6 +1,6 @@
 import { parse, type Expression, type FunctionParameter } from '../parser.js'
 import { Fraction, mmod } from 'xen-dev-utils/fraction'
-import type { Diagnostic } from '../diagnostics.js'
+import { EvaluationError, type Diagnostic } from '../diagnostics.js'
 import { isPositiveRationalRatio, Value } from '../value.js'
 import { evaluateBuiltinArgument, evaluateBuiltinCall, requireInteger } from './builtins.js'
 import { evaluateLiteral, type NumericLiteralNode } from './literals.js'
@@ -22,7 +22,7 @@ import type {
   StringValue,
   SourceOrigin,
 } from './types.js'
-import type { PitchContext, PrimeMapping } from './types.js'
+import type { MosContext, PitchContext, PrimeMapping } from './types.js'
 import {
   callableArity,
   EMPTY_LEXICAL_ENVIRONMENT,
@@ -563,10 +563,12 @@ function addOrSubtract(
   if (left.kind === 'absolutePitch' || right.kind === 'absolutePitch') {
     if (left.kind === 'absolutePitch' && right.kind === 'absolutePitch') {
       if (!subtract) throw new TypeError('Absolute pitches cannot be added together.')
+      const mos = left.mos?.context
       return {
         kind: 'pitchOffset',
         value: left.rootOffset.sub(right.rootOffset),
         spelling: spellPitchDifference(left, right),
+        ...(mos && right.mos?.context === mos && { mosContext: mos }),
         origins,
       }
     }
@@ -909,10 +911,15 @@ function containerItems(
   )
 }
 
-function pitchOperatorDisplacement(context: PitchContext, modifier: string): Value {
+function pitchOperatorDisplacement(
+  context: PitchContext,
+  modifier: string,
+  mos?: MosContext,
+): Value {
   const inflection = requirePitchOperator(
     context,
     modifier === 'up' || modifier === 'down' ? 'up' : 'lift',
+    mos,
   )
   return modifier === 'down' || modifier === 'drop' ? inflection.neg() : inflection
 }
@@ -966,11 +973,10 @@ function annotateReference(
     value.scaleDegree !== undefined &&
     value.degreeModifiers
   ) {
-    const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
     return {
       ...value,
       origins,
-      value: resolveScaleDegree(value.scaleDegree, value.degreeModifiers, context),
+      value: resolveScaleDegree(value.scaleDegree, value.degreeModifiers, pitchContextFor(mapping)),
     }
   }
   return { ...value, origins }
@@ -990,460 +996,343 @@ function captureScoreEnvironment(environment: LexicalEnvironment): LexicalEnviro
   return scope
 }
 
-/** Evaluate a value or capture score syntax without throwing for source errors. */
+function pitchContextFor(mapping: PrimeMapping | PitchContext): PitchContext {
+  return 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
+}
+
+function modifyPitch(
+  operand: EvaluatedLiteral,
+  node: Extract<Expression, { type: 'PitchModifierExpression' }>,
+  mapping: PrimeMapping | PitchContext,
+): EvaluatedLiteral {
+  const modifier = node.modifier.kind
+  const origins: SourceOrigin[] = [
+    ...operand.origins,
+    { role: 'operator', location: node.modifier.location },
+  ]
+  if (
+    operand.kind !== 'scalar' &&
+    operand.kind !== 'pitchOffset' &&
+    operand.kind !== 'absolutePitch'
+  )
+    throw new TypeError('Pitch modifiers require a numeric operand.')
+
+  const context = pitchContextFor(mapping)
+  const registers = modifierEquaveShift(modifier)
+  const absoluteMos = operand.kind === 'absolutePitch' ? operand.mos : undefined
+  const mos = operand.kind === 'pitchOffset' ? operand.mosContext : absoluteMos?.context
+  // Stored MOS pitches and intervals carry their own notation. Degrees and
+  // scalar ratios use the current scale, and other absolute pitches map the octave.
+  let shift: Value
+  if (registers) {
+    let equave = mos?.equave ?? context.mos?.equave ?? Value.cents(1200)
+    if (
+      operand.kind === 'scalar' ||
+      (operand.kind === 'pitchOffset' && operand.scaleDegree !== undefined)
+    )
+      equave = context.degreeEquave
+    else if (operand.kind === 'absolutePitch' && !absoluteMos) equave = context.mapping.mapPrime(2)
+    shift = equave.mul(new Value(registers))
+  } else shift = pitchOperatorDisplacement(context, modifier, mos)
+  if (operand.kind === 'scalar')
+    return result('scalar', operand.value.mul(Value.ratio(shift)), origins)
+
+  let formula = operand.formula
+  if (formula && registers) {
+    const shifted = new Map(formula)
+    const writtenShift =
+      operand.kind === 'absolutePitch' && !absoluteMos ? Value.cents(1200 * registers) : shift
+    for (const [prime, power] of writtenShift.primeExponents() ?? [])
+      shifted.set(prime, (shifted.get(prime) ?? new Fraction(0)).add(power))
+    formula = shifted
+  }
+  const modifiers = [modifier, ...(operand.spelling?.modifiers ?? [])]
+  if (operand.kind === 'absolutePitch')
+    return {
+      ...operand,
+      rootOffset: operand.rootOffset.add(shift),
+      formula: formula!,
+      spelling: { ...operand.spelling, modifiers },
+      ...(absoluteMos && registers
+        ? {
+            mos: {
+              ...absoluteMos,
+              rank: absoluteMos.rank + registers * absoluteMos.context.nominals.size,
+            },
+          }
+        : {}),
+      origins,
+    }
+  return {
+    ...operand,
+    value: operand.value.add(shift),
+    ...(formula && { formula }),
+    origins,
+    ...(operand.spelling && { spelling: { ...operand.spelling, modifiers } }),
+    ...(operand.degreeModifiers && { degreeModifiers: [...operand.degreeModifiers, modifier] }),
+  }
+}
+
+function applyUnary(
+  node: Extract<Expression, { type: 'UnaryExpression' }>,
+  operand: EvaluatedLiteral,
+  mapping: PrimeMapping | PitchContext,
+): EvaluatedLiteral {
+  const { operator } = node
+  const origins: SourceOrigin[] = [
+    ...operand.origins,
+    { location: node.location, role: 'operator' },
+  ]
+  if (operator === '@not') return booleanValue(!isTruthy(operand), origins)
+  if (
+    operand.kind !== 'scalar' &&
+    operand.kind !== 'pitchOffset' &&
+    operand.kind !== 'absolutePitch'
+  )
+    throw new TypeError('Unary operators require a numeric operand.')
+  switch (operator) {
+    case '+':
+      return operand
+    case '√':
+      if (operand.kind !== 'scalar') throw new TypeError('Square root requires a scalar operand.')
+      return result('scalar', operand.value.pow(new Fraction(1, 2)), origins)
+    case '~': {
+      if (operand.kind === 'pitchOffset') return operand
+      if (operand.kind === 'absolutePitch')
+        throw new TypeError('An absolute pitch cannot be tempered.')
+      if (!operand.value.isPositiveExactRatio())
+        throw new TypeError('Tempering requires a positive exact ratio.')
+      const formula = operand.value.primeExponents()!
+      return {
+        kind: 'pitchOffset',
+        value: mapFormula(formula, pitchContextFor(mapping).mapping),
+        formula,
+        spelling: spellIntervalFormula(formula),
+        origins,
+      }
+    }
+    case '-': {
+      if (operand.kind === 'absolutePitch')
+        throw new TypeError('An absolute pitch cannot be negated.')
+      if (operand.kind === 'scalar') return result('scalar', operand.value.neg(), origins)
+      const { spelling } = operand
+      return {
+        ...scalePitchOffset(operand, new Fraction(-1)),
+        origins,
+        spelling: spelling && {
+          ...spelling,
+          direction: spelling.direction === 'descending' ? 'ascending' : 'descending',
+          inflections: spelling.inflections?.map((inflection) => ({
+            ...inflection,
+            direction: inflection.direction === 'numerator' ? 'denominator' : 'numerator',
+          })),
+        },
+      }
+    }
+    default:
+      throw new TypeError(`Unknown unary operator ${operator}.`)
+  }
+}
+
+function indexedValue(collection: EvaluatedLiteral, index: EvaluatedLiteral): EvaluatedLiteral {
+  if (collection.kind === 'record') {
+    if (index.kind !== 'string') throw new TypeError('Record keys must be strings.')
+    const value = collection.fields.get(index.text)
+    if (!value) throw new RangeError(`Record has no field ${JSON.stringify(index.text)}.`)
+    return value
+  }
+  if (collection.kind !== 'container' && collection.kind !== 'string')
+    throw new TypeError('Indexing requires a container, record, or string.')
+  const label = collection.kind === 'string' ? 'String index' : 'Container index'
+  const offset = scalarInteger(index, label)
+  if (collection.kind === 'string') {
+    const point = Array.from(collection.text).at(offset)
+    if (point !== undefined) return stringValue(point, [...collection.origins, ...index.origins])
+  } else {
+    const item = collection.values.at(offset)
+    if (item) return item
+  }
+  throw new RangeError(`${label} is out of range.`)
+}
+
+/** Evaluate in the supplied lexical and pitch context, retaining source-located diagnostics. */
 export function evaluateExpression(
   node: Expression,
   mapping: PrimeMapping | PitchContext = DEFAULT_PITCH_CONTEXT,
   environment: LexicalEnvironment = preludeEnvironment(),
 ): ExpressionEvaluationResult {
+  const evaluate = (expression: Expression, scope = environment) =>
+    evaluateExpression(expression, mapping, scope)
+  const origins: SourceOrigin[] = [{ location: node.location, role: 'literal' }]
+  const diagnostics: Diagnostic[] = []
+  const done = (value: EvaluatedLiteral) => ({ value, diagnostics })
+  function read(expression: Expression) {
+    const evaluated = evaluate(expression)
+    if (!('value' in evaluated)) throw new EvaluationError(evaluated.diagnostics)
+    diagnostics.push(...evaluated.diagnostics)
+    return evaluated.value
+  }
   try {
-    if (node.type === 'StringLiteral')
-      return {
-        value: stringValue(node.value, [{ location: node.location, role: 'literal' }]),
-        diagnostics: [],
-      }
-    if (node.type === 'RecordLiteral') {
-      const fields = new Map<string, EvaluatedLiteral>()
-      const diagnostics: Diagnostic[] = []
-      for (const entry of node.entries) {
-        const key = entry.key.value
-        if (fields.has(key)) throw new TypeError(`Duplicate record key ${JSON.stringify(key)}.`)
-        const field = evaluateExpression(entry.value, mapping, environment)
-        diagnostics.push(...field.diagnostics)
-        if (!('value' in field)) return { diagnostics }
-        fields.set(key, field.value)
-      }
-      return {
-        value: {
-          kind: 'record',
-          fields,
-          value: new Value(0),
-          origins: [{ location: node.location, role: 'literal' }],
-        },
-        diagnostics,
-      }
-    }
-    if (needsScorePlayback(node)) {
-      return {
-        value: {
-          kind: 'scoreFragment',
-          expression: node,
-          environment: captureScoreEnvironment(environment),
-          value: new Value(0),
-          origins: [{ location: node.location, role: 'structural' }],
-        },
-        diagnostics: [],
-      }
-    }
-    if (node.type === 'DegreeLiteral') {
-      const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
-      const degree = Number(node.degree)
-      const modifiers = node.modifiers.map((modifier) => modifier.kind)
-      const value = resolveScaleDegree(degree, modifiers, context)
-      return {
-        value: {
-          ...result('pitchOffset', value, [{ location: node.location, role: 'literal' }]),
-          scaleDegree: degree,
-          degreeModifiers: modifiers,
-        },
-        diagnostics: [],
-      }
-    }
     if (isNumericLiteral(node)) {
       if (node.type === 'EqualDivisionLiteral' && node.equave) {
-        const equave = evaluateExpression(node.equave, mapping, environment)
-        if (!('value' in equave)) return equave
-        if (equave.value.kind !== 'scalar') {
+        const equave = read(node.equave)
+        if (equave.kind !== 'scalar')
           throw new TypeError('Equal-division equave must be a scalar ratio.')
-        }
-        return evaluateLiteral(node, equave.value.value)
+        const literal = evaluateLiteral(node, equave.value)
+        return { ...literal, diagnostics: [...diagnostics, ...literal.diagnostics] }
       }
       return evaluateLiteral(node)
     }
-    if (node.type === 'EnumeratedChord') {
-      const expanded = expandHarmonicSegment(node, (endpoint) =>
-        evaluateExpression(endpoint, mapping, environment),
-      )
-      if (!expanded.expressions.length) return { diagnostics: expanded.diagnostics }
-      const evaluated = expanded.expressions.map((expression) =>
-        evaluateExpression(expression, mapping, environment),
-      )
-      const diagnostics = [
-        ...expanded.diagnostics,
-        ...evaluated.flatMap((item) => item.diagnostics),
-      ]
-      if (!evaluated.every((item) => 'value' in item)) return { diagnostics }
-      return {
-        value: {
+    if (needsScorePlayback(node))
+      return done({
+        kind: 'scoreFragment',
+        expression: node,
+        environment: captureScoreEnvironment(environment),
+        value: new Value(0),
+        origins: [{ location: node.location, role: 'structural' }],
+      })
+    switch (node.type) {
+      case 'PitchLiteral':
+        return done(evaluatePitchLiteral(node, mapping))
+      case 'IntervalLiteral':
+        return done(evaluateIntervalLiteral(node, mapping))
+      case 'MosIntervalLiteral':
+        return done(evaluateMosIntervalLiteral(node, mapping))
+      case 'DegreeLiteral': {
+        const degree = Number(node.degree)
+        const modifiers = node.modifiers.map((modifier) => modifier.kind)
+        return done({
+          kind: 'pitchOffset',
+          scaleDegree: degree,
+          degreeModifiers: modifiers,
+          value: resolveScaleDegree(degree, modifiers, pitchContextFor(mapping)),
+          origins,
+        })
+      }
+      case 'StringLiteral':
+        return done(stringValue(node.value, origins))
+      case 'Identifier': {
+        const binding = lookupBinding(node.name, environment)
+        if (binding) return done(annotateReference(binding, origins[0]!, mapping))
+        if (node.name === 'true' || node.name === 'false')
+          return done(booleanValue(node.name === 'true', origins))
+        if (node.name === 'niente') return done({ kind: 'undefined', value: new Value(0), origins })
+        return {
+          diagnostics: [
+            {
+              code: 'XP_UNDEFINED_NAME',
+              severity: 'error',
+              message: `Undefined name ${node.name}.`,
+              locations: [node.location],
+            },
+          ],
+        }
+      }
+      case 'PostfixExpression':
+      case 'Group':
+      case 'NormalizeToSlot':
+      case 'Parallel':
+      case 'Sequence':
+        return containerItems(node, mapping, environment)
+      case 'RecordLiteral': {
+        const fields = new Map<string, EvaluatedLiteral>()
+        for (const { key, value } of node.entries) {
+          if (fields.has(key.value))
+            throw new TypeError(`Duplicate record key ${JSON.stringify(key.value)}.`)
+          fields.set(key.value, read(value))
+        }
+        return done({ kind: 'record', fields, value: new Value(0), origins })
+      }
+      case 'IndexExpression': {
+        const collection = evaluate(node.container)
+        const index = evaluate(node.index)
+        diagnostics.push(...collection.diagnostics, ...index.diagnostics)
+        if (!('value' in collection && 'value' in index)) return { diagnostics }
+        return done(indexedValue(collection.value, index.value))
+      }
+      case 'EnumeratedChord': {
+        const expanded = expandHarmonicSegment(node, evaluate)
+        const members = expanded.expressions.map((expression) => evaluate(expression))
+        diagnostics.push(
+          ...expanded.diagnostics,
+          ...members.flatMap((member) => member.diagnostics),
+        )
+        if (expanded.diagnostics.length || !members.every((member) => 'value' in member))
+          return { diagnostics }
+        return done({
           kind: 'container',
           composition: 'parallel',
-          values: evaluated.map((item) => item.value),
+          values: members.map((member) => member.value),
           value: new Value(0),
-          origins: [{ location: node.location, role: 'literal' }],
-        },
-        diagnostics,
+          origins,
+        })
       }
-    }
-    if (node.type === 'PitchLiteral')
-      return { value: evaluatePitchLiteral(node, mapping), diagnostics: [] }
-    if (node.type === 'IntervalLiteral')
-      return { value: evaluateIntervalLiteral(node, mapping), diagnostics: [] }
-    if (node.type === 'MosIntervalLiteral')
-      return { value: evaluateMosIntervalLiteral(node, mapping), diagnostics: [] }
-    if (node.type === 'Identifier') {
-      const value = lookupBinding(node.name, environment)
-      if (value)
-        return {
-          value: annotateReference(value, { location: node.location, role: 'literal' }, mapping),
-          diagnostics: [],
-        }
-    }
-    if (node.type === 'Identifier' && node.name === 'niente')
-      return {
-        value: {
-          kind: 'undefined',
-          value: new Value(0),
-          origins: [{ location: node.location, role: 'literal' }],
-        },
-        diagnostics: [],
-      }
-    if (node.type === 'Identifier' && (node.name === 'true' || node.name === 'false'))
-      return {
-        value: {
-          ...result('scalar', new Value(node.name === 'true' ? 1 : 0), [
-            { location: node.location, role: 'literal' },
-          ]),
-          boolean: true,
-        },
-        diagnostics: [],
-      }
-    if (node.type === 'LambdaExpression') {
-      const parameters = node.parameters.map((parameter) => parameter.name)
-      if (new Set(parameters).size !== parameters.length)
-        throw new TypeError('Lambda parameters must be unique.')
-      return {
-        value: {
+      case 'LambdaExpression': {
+        const parameters = node.parameters.map((parameter) => parameter.name)
+        if (new Set(parameters).size !== parameters.length)
+          throw new TypeError('Lambda parameters must be unique.')
+        return done({
           kind: 'lambda',
           identity: Symbol(),
           parameters,
           body: node.body,
           environment,
           value: new Value(0),
-          origins: [{ location: node.location, role: 'literal' }],
-        },
-        diagnostics: [],
-      }
-    }
-    if (node.type === 'Identifier')
-      return {
-        diagnostics: [
-          {
-            code: 'XP_UNDEFINED_NAME',
-            severity: 'error',
-            message: `Undefined name ${node.name}.`,
-            locations: [node.location],
-          },
-        ],
-      }
-    if (
-      node.type === 'Group' ||
-      node.type === 'NormalizeToSlot' ||
-      node.type === 'Sequence' ||
-      node.type === 'Parallel' ||
-      node.type === 'PostfixExpression'
-    )
-      return containerItems(node, mapping, environment)
-    if (node.type === 'PitchModifierExpression') {
-      const operand = evaluateExpression(node.operand, mapping, environment)
-      if (!('value' in operand)) return operand
-      if (
-        operand.value.kind === 'container' ||
-        operand.value.kind === 'undefined' ||
-        isCallableValue(operand.value) ||
-        operand.value.kind === 'scoreFragment' ||
-        operand.value.kind === 'string' ||
-        operand.value.kind === 'record'
-      )
-        throw new TypeError('Pitch modifiers require a numeric operand.')
-      const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
-      const modifier = node.modifier.kind
-      const equaveShift = modifierEquaveShift(modifier)
-      // A MOS equave governs MOS pitches and scale-relative values. Latin and
-      // Greek pitches retain their notational octave even while a MOS is active.
-      let scalarDisplacement: Value
-      let pitchDisplacement: Value
-      if (equaveShift) {
-        scalarDisplacement = context.degreeEquave.mul(new Value(equaveShift))
-        if (operand.value.kind === 'absolutePitch')
-          pitchDisplacement =
-            context.mos && operand.value.spelling.system === 'mos'
-              ? context.mos.equave.mul(new Value(equaveShift))
-              : context.mapping.mapPrime(2).mul(new Value(equaveShift))
-        else if ('scaleDegree' in operand.value)
-          pitchDisplacement = context.degreeEquave.mul(new Value(equaveShift))
-        else
-          pitchDisplacement = context.mos
-            ? context.mos.equave.mul(new Value(equaveShift))
-            : Value.pitch(new Value(2).pow(equaveShift))
-      } else {
-        const inflection = pitchOperatorDisplacement(context, modifier)
-        scalarDisplacement = inflection
-        pitchDisplacement = inflection
-      }
-      const operatorOrigin: SourceOrigin = { location: node.modifier.location, role: 'operator' }
-      const origins = [...operand.value.origins, operatorOrigin]
-      const equaveFormula = equaveShift
-        ? operand.value.kind === 'absolutePitch' && operand.value.spelling.system !== 'mos'
-          ? new Map([[2, new Fraction(equaveShift)]])
-          : Value.ratio(pitchDisplacement).primeExponents()
-        : undefined
-      const shiftedFormula = (formula: ReadonlyMap<number, Fraction>) => {
-        if (!equaveFormula) return formula
-        const shifted = new Map(formula)
-        for (const [prime, exponent] of equaveFormula) {
-          shifted.set(prime, (shifted.get(prime) ?? new Fraction(0)).add(exponent))
-        }
-        return shifted
-      }
-      if (operand.value.kind === 'scalar') {
-        return {
-          value: result(
-            'scalar',
-            operand.value.value.mul(Value.ratio(scalarDisplacement)),
-            origins,
-          ),
-          diagnostics: operand.diagnostics,
-        }
-      }
-      if (operand.value.kind === 'absolutePitch') {
-        return {
-          value: {
-            ...operand.value,
-            origins,
-            rootOffset: operand.value.rootOffset.add(pitchDisplacement),
-            formula: shiftedFormula(operand.value.formula),
-            spelling: {
-              ...operand.value.spelling,
-              modifiers: [modifier, ...(operand.value.spelling.modifiers ?? [])],
-            },
-          },
-          diagnostics: operand.diagnostics,
-        }
-      }
-      const offset =
-        operand.value.kind === 'pitchOffset' ? operand.value : pitchCoercion(operand.value)
-      return {
-        value: {
-          ...offset,
           origins,
-          value: offset.value.add(pitchDisplacement),
-          ...(offset.degreeModifiers
-            ? { degreeModifiers: [...offset.degreeModifiers, modifier] }
-            : {}),
-          ...(offset.formula ? { formula: shiftedFormula(offset.formula) } : {}),
-          ...(offset.spelling
-            ? {
-                spelling: {
-                  ...offset.spelling,
-                  modifiers: [modifier, ...(offset.spelling.modifiers ?? [])],
-                },
-              }
-            : {}),
-        },
-        diagnostics: operand.diagnostics,
+        })
       }
-    }
-    if (node.type === 'UnaryExpression') {
-      const operand = evaluateExpression(node.operand, mapping, environment)
-      if (!('value' in operand)) return operand
-      if (node.operator === '@not')
-        return {
-          value: {
-            ...result('scalar', new Value(isTruthy(operand.value) ? 0 : 1), [
-              ...operand.value.origins,
-              { location: node.location, role: 'operator' },
-            ]),
-            boolean: true,
-          },
-          diagnostics: operand.diagnostics,
-        }
-      if (
-        operand.value.kind === 'container' ||
-        operand.value.kind === 'undefined' ||
-        isCallableValue(operand.value) ||
-        operand.value.kind === 'scoreFragment' ||
-        operand.value.kind === 'string' ||
-        operand.value.kind === 'record'
-      )
-        throw new TypeError('Unary operators require a numeric operand.')
-      if (node.operator === '+') return operand
-      if (node.operator === '√') {
-        if (operand.value.kind !== 'scalar')
-          throw new TypeError('Square root requires a scalar operand.')
-        return {
-          value: result('scalar', operand.value.value.pow(new Fraction(1, 2)), [
-            ...operand.value.origins,
-            { location: node.location, role: 'operator' },
-          ]),
-          diagnostics: operand.diagnostics,
-        }
-      }
-      if (node.operator === '~') {
-        if (operand.value.kind === 'absolutePitch')
-          throw new TypeError('An absolute pitch cannot be tempered.')
-        if (operand.value.kind === 'pitchOffset') return operand
-        const ratio = operand.value.value
-        if (!ratio.isPositiveExactRatio())
-          throw new TypeError('Tempering requires a positive exact ratio.')
-        const formula = ratio.primeExponents()!
-        const context = 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
-        return {
-          value: {
-            kind: 'pitchOffset',
-            value: mapFormula(formula, context.mapping),
-            formula,
-            spelling: spellIntervalFormula(formula),
-            origins: [
-              ...operand.value.origins,
-              { location: node.location, role: 'operator' as const },
-            ],
-          },
-          diagnostics: operand.diagnostics,
-        }
-      }
-      if (node.operator !== '-') throw new TypeError(`Unknown unary operator ${node.operator}.`)
-      if (operand.value.kind === 'absolutePitch')
-        throw new TypeError('An absolute pitch cannot be negated.')
-      const origins: readonly SourceOrigin[] = [
-        ...operand.value.origins,
-        { location: node.location, role: 'operator' },
-      ]
-      return {
-        value:
-          operand.value.kind === 'scalar'
-            ? result('scalar', operand.value.value.neg(), origins)
-            : {
-                ...operand.value,
-                degreeModifiers: undefined,
-                value: operand.value.value.neg(),
-                formula: operand.value.formula
-                  ? new Map(
-                      [...operand.value.formula].map(([prime, exponent]) => [
-                        prime,
-                        new Fraction(exponent).neg(),
-                      ]),
-                    )
-                  : undefined,
-                spelling: operand.value.spelling
-                  ? {
-                      ...operand.value.spelling,
-                      direction:
-                        operand.value.spelling.direction === 'descending'
-                          ? 'ascending'
-                          : 'descending',
-                      inflections: operand.value.spelling.inflections?.map((inflection) => ({
-                        ...inflection,
-                        direction:
-                          inflection.direction === 'numerator' ? 'denominator' : 'numerator',
-                      })),
-                    }
-                  : undefined,
-                origins,
-              },
-        diagnostics: operand.diagnostics,
-      }
-    }
-    if (node.type === 'BinaryExpression') {
-      const left = evaluateExpression(node.left, mapping, environment)
-      if (!('value' in left)) return left
-      if (node.operator === 'al' && left.value.kind !== 'undefined') return left
-      const logical = node.operator === '@and' || node.operator === '@or'
-      if (logical) {
-        const truth = isTruthy(left.value)
-        if (truth === (node.operator === '@or'))
-          return {
-            value: booleanValue(truth, [
-              ...left.value.origins,
-              { location: node.location, role: 'operator' },
-            ]),
-            diagnostics: left.diagnostics,
-          }
-      }
-      const right = evaluateExpression(node.right, mapping, environment)
-      const diagnostics = [...left.diagnostics, ...right.diagnostics]
-      if (!('value' in right)) return { diagnostics }
-      const value = logical
-        ? booleanValue(isTruthy(right.value), operatorOrigins(left.value, right.value, node))
-        : isComparison(node.operator)
-          ? compareOperands(node, left.value, right.value)
-          : binary(node.operator, left.value, right.value, node)
-      return { value, diagnostics }
-    }
-    if (node.type === 'IndexExpression') {
-      const container = evaluateExpression(node.container, mapping, environment)
-      const index = evaluateExpression(node.index, mapping, environment)
-      const diagnostics = [...container.diagnostics, ...index.diagnostics]
-      if (!('value' in container) || !('value' in index)) return { diagnostics }
-      if (container.value.kind === 'record') {
-        if (index.value.kind !== 'string') throw new TypeError('Record keys must be strings.')
-        const value = container.value.fields.get(index.value.text)
-        if (!value) throw new RangeError(`Record has no field ${JSON.stringify(index.value.text)}.`)
-        return { value, diagnostics }
-      }
-      if (container.value.kind === 'string') {
-        const characters = Array.from(container.value.text)
-        const offset = scalarInteger(index.value, 'String index')
-        const character = characters.at(offset)
-        if (character === undefined) throw new RangeError('String index is out of range.')
-        return {
-          value: stringValue(character, [...container.value.origins, ...index.value.origins]),
-          diagnostics,
-        }
-      }
-      if (container.value.kind !== 'container')
-        throw new TypeError('Indexing requires a container, record, or string.')
-      const offset = scalarInteger(index.value, 'Container index')
-      const value =
-        container.value.values[offset < 0 ? container.value.values.length + offset : offset]
-      if (!value) throw new RangeError('Container index is out of range.')
-      return { value, diagnostics }
-    }
-    if (node.type === 'ConditionalExpression') {
-      const condition = evaluateExpression(node.condition, mapping, environment)
-      if (!('value' in condition)) return condition
-      const branch = evaluateExpression(
-        isTruthy(condition.value) ? node.consequent : node.alternate,
-        mapping,
-        environment,
-      )
-      return { ...branch, diagnostics: [...condition.diagnostics, ...branch.diagnostics] }
-    }
-    if (node.type === 'CallExpression') {
-      const evaluateReturn = (expression: Expression, scope: LexicalEnvironment) =>
-        evaluateExpression(expression, mapping, scope)
-      const returned = evaluateFunctionCall(node, mapping, environment, evaluateReturn)
-      if (returned) return returned
-      return evaluateBuiltinCall(
-        node,
-        environment,
-        (expression, scope = environment) => evaluateExpression(expression, mapping, scope),
-        (callback, args) =>
+      case 'CallExpression': {
+        const called = evaluateFunctionCall(node, mapping, environment, evaluate)
+        if (called) return called
+        return evaluateBuiltinCall(node, environment, evaluate, (callable, args) =>
           evaluateCallable(
-            callback,
+            callable,
             {
               callee:
-                callback.kind === 'function' ? callback.definition.declaration.name.name : 'lambda',
+                callable.kind === 'function' ? callable.definition.declaration.name.name : 'lambda',
               location: node.location,
             },
             args,
             mapping,
             environment,
-            evaluateReturn,
+            evaluate,
           ),
-      )
+        )
+      }
+      case 'ConditionalExpression':
+        return done(read(isTruthy(read(node.condition)) ? node.consequent : node.alternate))
+      case 'PitchModifierExpression':
+        return done(modifyPitch(read(node.operand), node, mapping))
+      case 'UnaryExpression':
+        return done(applyUnary(node, read(node.operand), mapping))
+      case 'BinaryExpression': {
+        const left = read(node.left)
+        if (node.operator === 'al') return done(left.kind === 'undefined' ? read(node.right) : left)
+        if (node.operator === '@and' || node.operator === '@or') {
+          const truth = isTruthy(left)
+          if (truth === (node.operator === '@or'))
+            return done(
+              booleanValue(truth, [...left.origins, { role: 'operator', location: node.location }]),
+            )
+          const right = read(node.right)
+          return done(booleanValue(isTruthy(right), operatorOrigins(left, right, node)))
+        }
+        const right = read(node.right)
+        return done(
+          isComparison(node.operator)
+            ? compareOperands(node, left, right)
+            : binary(node.operator, left, right, node),
+        )
+      }
+      default:
+        throw new TypeError(`${node.type} is not an arithmetic expression.`)
     }
-    throw new TypeError(`${node.type} is not an arithmetic expression.`)
   } catch (error) {
-    return { diagnostics: [diagnostic(node, error)] }
+    return {
+      diagnostics: [
+        ...diagnostics,
+        ...(error instanceof EvaluationError ? error.diagnostics : [diagnostic(node, error)]),
+      ],
+    }
   }
 }

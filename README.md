@@ -466,6 +466,8 @@ Each use retains the container's sequence or parallel structure and slot timing.
 Stored scale degrees and their pitch modifiers resolve in the tuning where
 they are used. Pitch arithmetic evaluates in the tuning where it runs. An
 explicit conversion such as `pitch(2d)` stores the resulting pitch offset.
+Stored Diamond-MOS pitches and MOS-step intervals keep their MOS configuration
+for pitch modifiers, even after a later tuning preset or MOS declaration.
 
 Bindings can also store fragments with rests, ties, repeats, or directives.
 

@@ -1,5 +1,5 @@
 import { Fraction } from 'xen-dev-utils/fraction'
-import type { Expression, Node, Repeat } from '../parser.generated.js'
+import type { Expression, Node } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
 import { catchableDiagnostic, EvaluationError } from '../diagnostics.js'
 import { isPositiveRationalRatio, Value } from '../value.js'
@@ -7,7 +7,6 @@ import {
   evaluateDeclaration,
   evaluateExpression,
   evaluateThrow,
-  isComparison,
   isTruthy,
   preludeEnvironment,
   evaluateFunctionCall,
@@ -18,7 +17,11 @@ import {
   repeatBoundaryLocation,
   resolveRepeatChain,
 } from './repeat-expansion.js'
-import { expandHarmonicSegment } from './harmonic-segments.js'
+import {
+  broadcastScalarOperation,
+  expandEnumeratedChord,
+  type ScoreExpression,
+} from './score-operations.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { DYNAMIC_VELOCITIES, resolveDirective } from './directives.js'
 import { Visitor, type VisitorEvaluation } from './visitor.js'
@@ -129,10 +132,6 @@ interface VisitorScope {
   readonly environment?: LexicalEnvironment
 }
 
-type ScoreExpression = Expression & {
-  readonly expansionPath?: ExpansionPath
-  readonly broadcastArticulation?: Fraction
-}
 type ScoreVisitor = Visitor<ScoreExpression, VisitorScope, ScoreShapeEvaluationResult>
 
 function withOccurrence(shape: ScoreShape, visitor: ScoreVisitor): ScoreShape {
@@ -141,345 +140,6 @@ function withOccurrence(shape: ScoreShape, visitor: ScoreVisitor): ScoreShape {
 }
 
 const MAX_REPEAT_EXPANSION_NODES = 100_000
-
-function mapScoreConstruction(
-  node: ScoreExpression,
-  mapLeaf: (leaf: ScoreExpression) => ScoreExpression,
-): Expression | undefined {
-  if (node.type === 'UnaryExpression' || node.type === 'PitchModifierExpression') {
-    return mapScoreConstruction(node.operand, (leaf) => ({ ...node, operand: mapLeaf(leaf) }))
-  }
-  const transformLeaf = (leaf: ScoreExpression): ScoreExpression => {
-    const mapped = mapLeaf(leaf)
-    // A broadcast operation takes its occurrence from the score item it transforms.
-    return leaf.expansionPath && mapped !== leaf
-      ? { ...mapped, expansionPath: leaf.expansionPath }
-      : mapped
-  }
-  const mapItem = (item: Expression): Expression => {
-    const construction = mapScoreConstruction(item, mapLeaf)
-    if (construction) return construction
-    if (item.type === 'Group') return { ...item, expression: mapItem(item.expression) }
-    if (item.type === 'PostfixExpression') {
-      return { ...item, expression: mapItem(item.expression) }
-    }
-    if (
-      item.type === 'Rest' ||
-      item.type === 'BarRest' ||
-      item.type === 'DetachedContinue' ||
-      item.type === 'Barline' ||
-      item.type === 'HardBoundary' ||
-      item.type === 'Directive' ||
-      item.type === 'PitchContextChange'
-    ) {
-      return item
-    }
-    return transformLeaf(item)
-  }
-  if (node.type === 'BinaryExpression' && node.operator === '->') {
-    return { ...node, left: mapItem(node.left), right: mapItem(node.right) }
-  }
-  if (node.type === 'Sequence') {
-    return {
-      ...node,
-      items: node.items.map(mapItem),
-    }
-  }
-  if (node.type === 'Parallel') {
-    return {
-      ...node,
-      branches: node.branches.map(mapItem),
-    }
-  }
-  if (node.type === 'NormalizeToSlot' && node.expression) {
-    return {
-      ...node,
-      expression: mapItem(node.expression),
-    }
-  }
-  if (node.type === 'Repeat' || node.type === 'RepeatChain') {
-    const mapRepeat = (repeat: Repeat): Repeat => ({
-      ...repeat,
-      body: repeat.body.map(mapItem),
-      endings: repeat.endings.map((ending) => ({ ...ending, body: ending.body.map(mapItem) })),
-    })
-    return node.type === 'Repeat'
-      ? mapRepeat(node)
-      : { ...node, repeats: node.repeats.map(mapRepeat) }
-  }
-  if (node.type === 'Group') {
-    const expression = mapScoreConstruction(node.expression, mapLeaf)
-    if (expression) return { ...node, expression }
-  }
-  if (node.type === 'PostfixExpression') {
-    const expression = mapScoreConstruction(node.expression, mapLeaf)
-    return { ...node, expression: expression ?? transformLeaf(node.expression) }
-  }
-  return undefined
-}
-
-function isScalarOperand(node: Expression): boolean {
-  if (mapScoreConstruction(node, (leaf) => leaf)) return false
-  if (node.type === 'Group') return isScalarOperand(node.expression)
-  return ![
-    'Rest',
-    'BarRest',
-    'DetachedContinue',
-    'Barline',
-    'HardBoundary',
-    'Directive',
-    'PitchContextChange',
-    'PostfixExpression',
-    'EnumeratedChord',
-  ].includes(node.type)
-}
-
-type BroadcastScalar = {
-  expression: Expression
-  articulation: Fraction
-  continuations: Extract<Expression, { type: 'PostfixExpression' }>['marks']
-}
-
-/** Unwrap a single pitch expression together with the performance context authored around it. */
-function broadcastScalarOperand(
-  node: Expression,
-  context: PitchContext,
-  environment?: LexicalEnvironment,
-): BroadcastScalar | undefined {
-  if (node.type === 'Group') return broadcastScalarOperand(node.expression, context, environment)
-  if (node.type === 'PostfixExpression') {
-    const scalar = broadcastScalarOperand(node.expression, context, environment)
-    if (!scalar) return undefined
-    return {
-      ...scalar,
-      continuations: [
-        ...scalar.continuations,
-        ...node.marks.filter((mark) => mark.type === 'DetachedContinue'),
-      ],
-    }
-  }
-  if (node.type === 'Sequence') {
-    let articulation = new Fraction(1)
-    let scalar: BroadcastScalar | undefined
-    for (const item of node.items) {
-      if (item.type === 'Directive') {
-        const names: Record<string, Fraction> = {
-          'articulation-shorthand': new Fraction(1),
-          art: new Fraction(1),
-          staccatissimo: new Fraction(1, 4),
-          staccato: new Fraction(1, 2),
-          portato: new Fraction(17, 20),
-          tenuto: new Fraction(1),
-          legato: new Fraction(11, 10),
-        }
-        const shorthand = (item as typeof item & { articulationMark?: string }).articulationMark
-        const shorthandRatios: Record<string, Fraction> = {
-          "'": new Fraction(1, 4),
-          '.': new Fraction(1, 2),
-          ':': new Fraction(17, 20),
-          '-': new Fraction(1),
-          _: new Fraction(11, 10),
-        }
-        if (shorthand) articulation = shorthandRatios[shorthand]!
-        else if (item.name !== 'art') {
-          const named = names[item.name]
-          if (!named) return undefined
-          articulation = named
-        } else {
-          const resolved = resolveDirective(item, context, environment).directive
-          if (resolved?.kind !== 'articulation') return undefined
-          articulation = resolved.ratio
-        }
-        continue
-      }
-      if (scalar) return undefined
-      scalar = broadcastScalarOperand(item, context, environment)
-      if (!scalar) return undefined
-    }
-    return scalar ? { ...scalar, articulation } : undefined
-  }
-  return isScalarOperand(node)
-    ? { expression: node, articulation: new Fraction(1), continuations: [] }
-    : undefined
-}
-
-function applyBroadcastContinuations(
-  expression: Expression,
-  continuations: BroadcastScalar['continuations'],
-): Expression {
-  if (!continuations.length) return expression
-  if (expression.type === 'PostfixExpression') {
-    const existing = expression.marks.filter((mark) => mark.type === 'DetachedContinue')
-    if (existing.length >= continuations.length) return expression
-    return {
-      ...expression,
-      marks: [...expression.marks, ...continuations.slice(existing.length)],
-    }
-  }
-  return {
-    type: 'PostfixExpression',
-    expression,
-    marks: continuations,
-    location: expression.location,
-  }
-}
-
-function zipScoreConstructions(
-  left: Expression,
-  right: Expression,
-  combine: (left: ScoreExpression, right: ScoreExpression) => ScoreExpression,
-): Expression | undefined {
-  const zipItems = (leftItems: Expression[], rightItems: Expression[]) => {
-    if (leftItems.length !== rightItems.length) return undefined
-    const items = leftItems.map((leftItem, index) => {
-      const rightItem = rightItems[index]!
-      return (
-        zipScoreConstructions(leftItem, rightItem, combine) ??
-        (isScalarOperand(leftItem) && isScalarOperand(rightItem)
-          ? combine(leftItem, rightItem)
-          : undefined)
-      )
-    })
-    return items.every((item) => item !== undefined) ? items : undefined
-  }
-
-  if (left.type === 'NormalizeToSlot' && right.type === 'NormalizeToSlot') {
-    if (!left.expression || !right.expression) return undefined
-    const expression =
-      zipScoreConstructions(left.expression, right.expression, combine) ??
-      (isScalarOperand(left.expression) && isScalarOperand(right.expression)
-        ? combine(left.expression, right.expression)
-        : undefined)
-    return expression ? { ...left, expression } : undefined
-  }
-  if (left.type === 'Sequence' && right.type === 'Sequence') {
-    const items = zipItems(left.items, right.items)
-    return items ? { ...left, items } : undefined
-  }
-  if (left.type === 'Parallel' && right.type === 'Parallel') {
-    const branches = zipItems(left.branches, right.branches)
-    return branches ? { ...left, branches } : undefined
-  }
-  if (left.type === 'Group' && right.type === 'Group') {
-    const expression =
-      zipScoreConstructions(left.expression, right.expression, combine) ??
-      (isScalarOperand(left.expression) && isScalarOperand(right.expression)
-        ? combine(left.expression, right.expression)
-        : undefined)
-    return expression ? { ...left, expression } : undefined
-  }
-  return undefined
-}
-
-function broadcastScalarOperation(
-  node: Expression,
-  context: PitchContext,
-  environment?: LexicalEnvironment,
-): Expression | undefined {
-  if (node.type === 'Group') {
-    const expression = broadcastScalarOperation(node.expression, context, environment)
-    return expression ? { ...node, expression } : undefined
-  }
-  if (node.type === 'PostfixExpression') {
-    const expression = broadcastScalarOperation(node.expression, context, environment)
-    return expression ? { ...node, expression } : undefined
-  }
-  if (node.type === 'UnaryExpression' || node.type === 'PitchModifierExpression') {
-    const operand = broadcastScalarOperation(node.operand, context, environment)
-    if (operand) return { ...node, operand }
-    return mapScoreConstruction(node.operand, (item) => ({ ...node, operand: item }))
-  }
-  if (node.type !== 'BinaryExpression' || node.operator === '->' || isComparison(node.operator))
-    return undefined
-  const left = broadcastScalarOperation(node.left, context, environment)
-  if (left) return { ...node, left }
-  const right = broadcastScalarOperation(node.right, context, environment)
-  if (right) return { ...node, right }
-  const zipped = zipScoreConstructions(node.left, node.right, (left, right) => ({
-    ...node,
-    expansionPath: left.expansionPath?.length ? left.expansionPath : right.expansionPath,
-    left,
-    right,
-  }))
-  if (zipped) return zipped
-  const leftScalar = broadcastScalarOperand(node.left, context, environment)
-  if (leftScalar) {
-    const mapped = mapScoreConstruction(node.right, (right) => ({
-      ...node,
-      left: leftScalar.expression,
-      right,
-      broadcastArticulation: leftScalar.articulation,
-    }))
-    if (mapped) return applyBroadcastContinuations(mapped, leftScalar.continuations)
-  }
-  const rightScalar = broadcastScalarOperand(node.right, context, environment)
-  if (rightScalar) {
-    const mapped = mapScoreConstruction(node.left, (left) => ({
-      ...node,
-      left,
-      right: rightScalar.expression,
-      broadcastArticulation: rightScalar.articulation,
-    }))
-    if (mapped) return applyBroadcastContinuations(mapped, rightScalar.continuations)
-  }
-  const overLeft = isScalarOperand(node.right)
-    ? mapScoreConstruction(node.left, (left) => ({ ...node, left }))
-    : undefined
-  if (overLeft) return overLeft
-  if (!isScalarOperand(node.left)) return undefined
-  return mapScoreConstruction(node.right, (right) => ({ ...node, right }))
-}
-
-function expandEnumeratedChord(
-  node: Expression,
-  context: PitchContext,
-  environment?: LexicalEnvironment,
-): { readonly expressions: readonly Expression[]; readonly diagnostics: readonly Diagnostic[] } {
-  if (node.type === 'EnumeratedChord') {
-    return expandHarmonicSegment(node, (endpoint) =>
-      evaluateExpression(endpoint, context, environment),
-    )
-  }
-  if (node.type === 'BinaryExpression' && !isComparison(node.operator)) {
-    const left = expandEnumeratedChord(node.left, context, environment)
-    const right = expandEnumeratedChord(node.right, context, environment)
-    if (
-      left.expressions.length === 1 &&
-      left.expressions[0] === node.left &&
-      right.expressions.length === 1 &&
-      right.expressions[0] === node.right
-    ) {
-      return { expressions: [node], diagnostics: [...left.diagnostics, ...right.diagnostics] }
-    }
-    return {
-      expressions: left.expressions.flatMap((lhs) =>
-        right.expressions.map((rhs) => ({ ...node, left: lhs, right: rhs })),
-      ),
-      diagnostics: [...left.diagnostics, ...right.diagnostics],
-    }
-  }
-  if (node.type === 'Group') {
-    const expanded = expandEnumeratedChord(node.expression, context, environment)
-    if (expanded.expressions.length === 1 && expanded.expressions[0] === node.expression) {
-      return { expressions: [node], diagnostics: expanded.diagnostics }
-    }
-    return {
-      expressions: expanded.expressions.map((expression) => ({ ...node, expression })),
-      diagnostics: expanded.diagnostics,
-    }
-  }
-  if (node.type === 'UnaryExpression' || node.type === 'PitchModifierExpression') {
-    const expanded = expandEnumeratedChord(node.operand, context, environment)
-    if (expanded.expressions.length === 1 && expanded.expressions[0] === node.operand) {
-      return { expressions: [node], diagnostics: expanded.diagnostics }
-    }
-    return {
-      expressions: expanded.expressions.map((operand) => ({ ...node, operand })),
-      diagnostics: expanded.diagnostics,
-    }
-  }
-  return { expressions: [node], diagnostics: [] }
-}
 
 function repeatCount(node: Extract<Expression, { type: 'Repeat' }>): number | undefined {
   let count: bigint
@@ -619,22 +279,22 @@ function pad(shape: ScoreShape, duration: Fraction): ScoreShape {
   return sequence([shape, generatedRest(missing)], shape.origins)
 }
 
+function mapAttacks(shape: ScoreShape, update: (attack: AttackShape) => AttackShape): ScoreShape {
+  switch (shape.kind) {
+    case 'attack':
+      return update(shape)
+    case 'sequence':
+      return { ...shape, children: shape.children.map((child) => mapAttacks(child, update)) }
+    case 'parallel':
+      return { ...shape, branches: shape.branches.map((branch) => mapAttacks(branch, update)) }
+    default:
+      return shape
+  }
+}
+
 function scaleShape(shape: ScoreShape, factor: Fraction): ScoreShape {
   const duration = shape.duration.mul(factor)
   switch (shape.kind) {
-    case 'attack':
-    case 'rest':
-    case 'continue':
-    case 'barline':
-    case 'annotation':
-    case 'dynamic':
-    case 'clef':
-    case 'time-signature':
-    case 'tempo':
-    case 'key-signature':
-    case 'groove':
-    case 'drone':
-      return { ...shape, duration }
     case 'sequence':
       return {
         ...shape,
@@ -647,38 +307,13 @@ function scaleShape(shape: ScoreShape, factor: Fraction): ScoreShape {
         duration,
         branches: shape.branches.map((branch) => scaleShape(branch, factor)),
       }
+    default:
+      return { ...shape, duration }
   }
 }
 
-/** Trim from the rhythmic tail without moving or rescaling earlier material. */
-function trimShape(shape: ScoreShape, duration: Fraction): ScoreShape {
-  if (duration.compare(0) < 0 || duration.compare(shape.duration) > 0)
-    throw new RangeError('Invalid trimmed duration.')
-  if (shape.kind === 'sequence') {
-    let remaining = duration
-    const children = shape.children.map((child) => {
-      const kept = remaining.compare(child.duration) >= 0 ? child.duration : remaining
-      remaining = remaining.sub(kept)
-      return trimShape(child, kept)
-    })
-    return { ...shape, duration, children }
-  }
-  if (shape.kind === 'parallel') {
-    return {
-      ...shape,
-      duration,
-      branches: shape.branches.map((branch) =>
-        trimShape(branch, branch.duration.compare(duration) > 0 ? duration : branch.duration),
-      ),
-    }
-  }
-  return { ...shape, duration }
-}
-
-/** Give a zero-duration pitch shape time without dividing by its old duration. */
 function resizeShape(shape: ScoreShape, duration: Fraction): ScoreShape {
   if (shape.duration.n) return scaleShape(shape, duration.div(shape.duration))
-  if (shape.kind === 'attack') return { ...shape, duration }
   if (shape.kind === 'parallel')
     return {
       ...shape,
@@ -686,28 +321,39 @@ function resizeShape(shape: ScoreShape, duration: Fraction): ScoreShape {
       branches: shape.branches.map((branch) => resizeShape(branch, duration)),
     }
   if (shape.kind === 'sequence') {
-    const pitchChild = shape.children.findIndex((child) => attacks(child).length > 0)
+    // A grace group may have been cut all the way to zero. Its first sounding
+    // item takes the grace span, and the rest keep their coincident onsets.
+    const first = shape.children.findIndex((child) => attacks(child).length)
     return {
       ...shape,
       duration,
       children: shape.children.map((child, index) =>
-        index === pitchChild ? resizeShape(child, duration) : child,
+        index === first ? resizeShape(child, duration) : child,
       ),
     }
   }
   return { ...shape, duration }
 }
 
-function mapAttacks(
-  shape: ScoreShape,
-  transform: (attack: AttackShape) => AttackShape,
-): ScoreShape {
-  if (shape.kind === 'attack') return transform(shape)
-  if (shape.kind === 'sequence')
-    return { ...shape, children: shape.children.map((child) => mapAttacks(child, transform)) }
+/** Clip each written slot, including sounds that extend past the enclosing slot. */
+function trimShape(shape: ScoreShape, cutoff: Fraction): ScoreShape {
+  const duration = shape.duration.compare(cutoff) <= 0 ? shape.duration : cutoff
   if (shape.kind === 'parallel')
-    return { ...shape, branches: shape.branches.map((branch) => mapAttacks(branch, transform)) }
-  return shape
+    return {
+      ...shape,
+      duration,
+      branches: shape.branches.map((branch) => trimShape(branch, duration)),
+    }
+  if (shape.kind === 'sequence') {
+    let remaining = duration
+    const children = shape.children.map((child) => {
+      const kept = trimShape(child, remaining)
+      remaining = remaining.sub(kept.duration)
+      return kept
+    })
+    return { ...shape, duration, children }
+  }
+  return { ...shape, duration }
 }
 
 type PitchTree =
