@@ -133,6 +133,9 @@ are drawn as straight segments between their pitch endpoints.
 
 The pitched and sample languages share document sequencing, parallel branches,
 normalized groups, repeats, rests, continuations, postfix marks, and directives.
+Write `()` for an empty parallel, which takes no time, and `(C,)` for a
+parallel with one branch. `(C)` groups a single expression.
+
 Callers enumerate sample names when parsing. Without that option, `bd` retains
 its pitched meaning as B half-flat.
 

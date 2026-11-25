@@ -361,6 +361,16 @@ describe('arithmetic expression evaluation', () => {
     ).toEqual(['1', '6/5', '2'])
   })
 
+  it('evaluates empty and singleton parallels as containers', () => {
+    expect(evaluate('()')).toMatchObject({ kind: 'container', composition: 'parallel', values: [] })
+    const singleton = evaluate('(3/2,)')
+    if (singleton.kind !== 'container') throw new Error('Expected a singleton container.')
+    expect(singleton.composition).toBe('parallel')
+    expect(singleton.values).toHaveLength(1)
+    expect(singleton.values[0]!.value.equals(new Fraction(3, 2))).toBe(true)
+    expect(evaluate('((3/2,) * 2/1)[0]').value.equals(3)).toBe(true)
+  })
+
   it('provides combination and sorting container built-ins', () => {
     const combinations = evaluate('kCombinations([1/1, 3/1, 5/1], 2/1)')
     expect(combinations.kind).toBe('container')

@@ -407,6 +407,12 @@ ParenthesizedExpression
   = "(" Spacing expression:GroupedScore Spacing ")" {
       return node('Group', { expression });
     }
+  / "(" Spacing ")" {
+      return node('Parallel', { branches: [] });
+    }
+  / "(" Spacing branch:ScopedSequenceExpression Comma ")" {
+      return node('Parallel', { branches: [branch] });
+    }
 
 NormalizedGroup
   = "[" Spacing expression:GroupedScore? Spacing "]" {
