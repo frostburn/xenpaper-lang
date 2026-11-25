@@ -1,4 +1,5 @@
 import { Fraction } from 'xen-dev-utils/fraction'
+import { EvaluationError } from '../diagnostics.js'
 import type { ScoreShape, SourceOrigin } from './types.js'
 import { layoutNotes, type PlacedNote } from './note-layout.js'
 
@@ -57,7 +58,9 @@ function materialize(
 }
 
 export function materializeScoreContinuations(shape: ScoreShape): ScoreShape {
-  return materialize(shape, layoutNotes(shape))
+  const layout = layoutNotes(shape)
+  if (layout.diagnostics.length) throw new EvaluationError(layout.diagnostics)
+  return materialize(shape, layout)
 }
 
 export function tieScoreShapes(
@@ -67,6 +70,8 @@ export function tieScoreShapes(
 ): ScoreShape {
   const sources = layoutNotes(left)
   const targets = layoutNotes(right)
+  const diagnostics = [...sources.diagnostics, ...targets.diagnostics]
+  if (diagnostics.length) throw new EvaluationError(diagnostics)
   const removed = new Set<PlacedNote>()
   for (const source of sources.notes) {
     let end: Fraction | undefined

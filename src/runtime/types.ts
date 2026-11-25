@@ -702,6 +702,8 @@ export interface SequenceShape extends ShapeBase {
 export interface ParallelShape extends ShapeBase {
   readonly kind: 'parallel'
   readonly branches: readonly ScoreShape[]
+  /** Whether the parallel was explicitly normalized into a single rhythmic slot. */
+  readonly normalized?: boolean
 }
 
 export type ScoreShape =

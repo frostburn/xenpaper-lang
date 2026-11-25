@@ -748,7 +748,12 @@ export function evaluateScoreSemantics(
   playback = false,
 ): ScoreShapeEvaluationResult {
   const initialization = options.initialization
-  if (!initialization?.changes?.length) return evaluateScorePass(node, options, playback)
+  if (!initialization?.changes?.length) {
+    const result = evaluateScorePass(node, options, playback)
+    if (playback || !hasShape(result)) return result
+    const { diagnostics } = layoutNotes(result.shape)
+    return diagnostics.length ? { diagnostics: [...result.diagnostics, ...diagnostics] } : result
+  }
 
   const offset = options.beatOffset ?? new Fraction(0)
   const sources = new Map<unknown, number>()
@@ -760,7 +765,8 @@ export function evaluateScoreSemantics(
     const result = evaluateScorePass(node, options, playback, { sources, beats, attacks })
     if (!hasShape(result)) return result
     const placements = new Map<TimelineVisit, Fraction>()
-    for (const note of layoutNotes(result.shape).notes) {
+    const layout = layoutNotes(result.shape)
+    for (const note of layout.notes) {
       const visit = attacks.get(note.pitch)
       if (!visit) continue
       const beat = offset.add(note.start)
@@ -781,7 +787,10 @@ export function evaluateScoreSemantics(
       if (contextAt(initialization, beat) !== contextAt(initialization, visit.beat)) changed = true
       if (!beat.equals(visit.offset)) next.set(visit.key, beat)
     }
-    if (!changed) return result
+    if (!changed)
+      return layout.diagnostics.length
+        ? { diagnostics: [...result.diagnostics, ...layout.diagnostics] }
+        : result
     beats = next
   }
   return {
@@ -2059,7 +2068,12 @@ function evaluateScorePass(
             const to = attacks(target.shape)
             const sourceTree = pitchTree(sourceShape)
             const targetTree = pitchTree(target.shape)
-            if (!sourceTree || !targetTree || !matchingPitchTrees(sourceTree, targetTree))
+            const { diagnostics: continuationDiagnostics } = layoutNotes(target.shape)
+            if (continuationDiagnostics.length)
+              results[targetIndex] = {
+                diagnostics: [...target.diagnostics, ...continuationDiagnostics],
+              }
+            else if (!sourceTree || !targetTree || !matchingPitchTrees(sourceTree, targetTree))
               results.push({
                 diagnostics: [
                   {
@@ -2309,7 +2323,7 @@ function evaluateScorePass(
       }
       return {
         shape:
-          normalized.kind === 'sequence'
+          normalized.kind === 'sequence' || normalized.kind === 'parallel'
             ? { ...normalized, normalized: true, isolatedDirectiveScope: true }
             : { ...normalized, isolatedDirectiveScope: true },
         diagnostics: evaluated.diagnostics,
@@ -2359,7 +2373,7 @@ function evaluateScorePass(
         )
           continued = continued.children[0]!
         const stretch =
-          continued.kind === 'parallel' ||
+          (continued.kind === 'parallel' && continued.normalized) ||
           (continued.kind === 'sequence' &&
             (continued.normalized || continued.continuationTarget === 'all'))
         const duration = evaluated.shape.duration.sub(currentPulse.mul(elimination?.count ?? 0))
@@ -2496,11 +2510,6 @@ function evaluateScorePass(
     }
     const evaluated = playablePitch(current, context, value)
     if (!('pitch' in evaluated)) return evaluated
-    const { broadcastArticulation } = current
-    const articulation =
-      broadcastArticulation && broadcastArticulation.compare(currentArticulation) > 0
-        ? broadcastArticulation
-        : currentArticulation
     const shape: PlaybackAttackShape = {
       kind: 'attack',
       pitch: evaluated.pitch,
@@ -2509,7 +2518,7 @@ function evaluateScorePass(
       rootPitch: context.rootPitch,
       dynamic: currentDynamic,
       velocity: DYNAMIC_VELOCITIES[currentDynamic],
-      articulation,
+      articulation: currentArticulation,
       directiveState: { ...currentDirectiveState },
       ...(currentArticulationMarks.length ? { articulationMarks: currentArticulationMarks } : {}),
       ...('raw' in current ? { authoredLabel: String(current.raw) } : {}),
