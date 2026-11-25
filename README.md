@@ -184,6 +184,10 @@ their scaled positions. If a context-dependent expression changes that rhythm,
 layout is resolved again; a cyclic or non-converging layout is diagnosed rather
 than assigned inconsistent note positions.
 
+The global timeline applies to expanded note positions, including repeats and
+notes moved by a continuation. For example, `(. 1d, D) =` places `1d` at beat
+2 relative to the clip. A global tuning change at that beat applies to the note.
+
 The lower-level literal, expression, pitch, FJS, directive, and notation helpers
 are exported for focused tooling and tests. There is not yet a single
 `compile(source)` convenience API; consumers must call `parse()` themselves.
@@ -539,11 +543,12 @@ contexts.
 Scope is sequential and lexical: a declaration is visible only after its source
 position. A function captures the environment at its declaration, arguments are
 evaluated exactly once in left-to-right order at the call site, and parameters
-are then bound in a child scope. Later declarations may shadow earlier ones.
+are then bound in a child scope. A function name can be declared once per scope.
+An inner scope can declare a function with the same name.
 Groups, normalized groups, and each parallel branch isolate their local bindings;
 hard boundaries retain the surrounding sequence's bindings. Repeats splice their
 body and selected ending into that sequence, just like written-out copies.
-Declarations are evaluated at each occurrence and can shadow earlier bindings;
+Variable declarations are evaluated at each occurrence and can shadow earlier bindings;
 explicit groups, slots, function calls, control-flow blocks, and parallel branches create scopes.
 
 Parameter names must be unique. Functions are intentionally non-recursive (both

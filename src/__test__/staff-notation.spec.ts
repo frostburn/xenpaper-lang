@@ -180,6 +180,18 @@ describe('staff notation construction', () => {
     expect(
       collect('{12edo}C D E ~9/8 9/8 5/4 pitch(9/8)').map((note) => note.justIntonation),
     ).toEqual([undefined, undefined, undefined, undefined, true, true, true])
+    for (const argument of ['700c', '1200c', '7d', 'pi', '1.5r', 'sqrt(2)', 'ratio(700c)']) {
+      const notes = collect(`{12edo} pitch(${argument})`)
+      expect(notes.map((note) => note.justIntonation)).toEqual([undefined])
+    }
+    expect(
+      collect('{12edo} pitch(pitch(9/8)) pitch(2/1 ** -60)').map((note) => note.justIntonation),
+    ).toEqual([true, true])
+    expect(
+      collect('{12edo} sqrt(2) pitch(sqrt(2)) 3/2 pitch(3/2) 2/1 ** -60 pitch(2/1 ** -60)').map(
+        (note) => note.justIntonation,
+      ),
+    ).toEqual([undefined, undefined, true, true, true, true])
   })
 
   it('retains shorthand articulation marks until a named articulation resets them', () => {

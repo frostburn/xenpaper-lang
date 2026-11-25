@@ -1,11 +1,11 @@
 import { Fraction } from 'xen-dev-utils/fraction'
-import type { Program } from '../parser.generated.js'
+import type { Program } from '../parser.js'
 import type { Diagnostic } from '../diagnostics.js'
-import { evaluateProgramSemantics } from './score-shape.js'
 import { DYNAMIC_VELOCITIES } from './directives.js'
-import { Visitor, type VisitorEvaluation } from './visitor.js'
+import { evaluateProgramSemantics } from './score-shape.js'
+import { layoutNotes, type PlacedNote } from './note-layout.js'
 import type {
-  BeatTimedEvent,
+  AttackShape,
   BeatTimedMarkerEvent,
   BeatTimedNoteEvent,
   BeatTimedScore,
@@ -14,384 +14,235 @@ import type {
 } from './types.js'
 
 export type BeatEventExpansionOptions = ScoreShapeOptions
-
 export type BeatEventExpansionResult =
   | { readonly score: BeatTimedScore; readonly diagnostics: readonly Diagnostic[] }
   | { readonly diagnostics: readonly Diagnostic[] }
+type Control = { actual: Fraction; dynamic: Fraction; articulation: Fraction }
+type Groove = { origin: Fraction; cycle: Fraction; points: Control[] }
+type GrooveChange = { start: Fraction; groove?: Groove }
+interface Flattened {
+  score: BeatTimedScore
+  diagnostics: Diagnostic[]
+  grooveChanges: GrooveChange[]
+}
+const one = new Fraction(1)
 
-interface BeatEventFlatteningResult {
-  readonly score: BeatTimedScore
-  readonly diagnostics: readonly Diagnostic[]
-  readonly grooveChanges: readonly GrooveChange[]
+function buildGroove(score: BeatTimedScore, origin: Fraction): Groove | undefined {
+  const notes = score.events.filter((n) => n.kind === 'note')
+  if (notes.length < 2 || !score.duration.n) return
+  const points = notes.map((note, index) => {
+    const width = (notes[index + 1]?.start ?? score.duration).sub(note.start)
+    return {
+      actual: note.start,
+      dynamic: note.dynamic.div(DYNAMIC_VELOCITIES.mf),
+      articulation: width.n ? note.duration.div(width) : one,
+    }
+  })
+  return { origin, cycle: score.duration, points }
 }
 
-const copy = (value: Fraction) => new Fraction(value.n, value.d)
+/** Interpolate timing to the cycle boundary and expression back to the first control. */
+function sample(groove: Groove, beat: Fraction) {
+  const { origin, cycle, points } = groove
+  const phase = beat.sub(origin).mmod(cycle)
+  const position = phase.div(cycle).mul(points.length)
+  const index = position.floor().valueOf()
+  const t = position.sub(index)
+  const a = points[index]!
+  const b = points[(index + 1) % points.length]!
+  const interpolate = (x: Fraction, y: Fraction) => x.add(y.sub(x).mul(t))
+  return {
+    beat: beat
+      .sub(phase)
+      .add(interpolate(a.actual, index + 1 === points.length ? cycle : b.actual)),
+    dynamic: interpolate(a.dynamic, b.dynamic),
+    articulation: interpolate(a.articulation, b.articulation),
+  }
+}
 
-function timedMarker(
-  shape: Extract<ScoreShape, { kind: BeatTimedMarkerEvent['marker'] }>,
+function marker(
+  node: Extract<ScoreShape, { kind: BeatTimedMarkerEvent['marker'] }>,
   start: Fraction,
 ): BeatTimedMarkerEvent {
   const base = {
     kind: 'marker' as const,
-    start: copy(start),
-    origins: shape.origins,
-    ...(shape.expansionPath && { expansionPath: shape.expansionPath }),
+    start,
+    origins: node.origins,
+    ...(node.expansionPath && { expansionPath: node.expansionPath }),
   }
-  switch (shape.kind) {
+  switch (node.kind) {
     case 'barline':
       return {
         ...base,
-        marker: shape.kind,
-        style: shape.style,
-        label: shape.style,
-        ...(shape.endingNumber !== undefined && { endingNumber: shape.endingNumber }),
+        marker: node.kind,
+        label: node.style,
+        style: node.style,
+        ...(node.endingNumber !== undefined && { endingNumber: node.endingNumber }),
       }
-    case 'annotation':
-      return { ...base, marker: shape.kind, label: shape.text }
     case 'dynamic':
-      return { ...base, marker: shape.kind, mark: shape.mark, label: shape.mark }
+      return { ...base, marker: node.kind, mark: node.mark, label: node.mark }
     case 'time-signature':
       return {
         ...base,
-        marker: shape.kind,
-        numerator: shape.numerator,
-        denominator: shape.denominator,
-        label: `${shape.numerator}/${shape.denominator}`,
+        marker: node.kind,
+        numerator: node.numerator,
+        denominator: node.denominator,
+        label: `${node.numerator}/${node.denominator}`,
       }
     case 'tempo':
-      return { ...base, marker: shape.kind, bpm: shape.bpm, label: shape.bpm.toFraction() }
+      return { ...base, marker: node.kind, bpm: node.bpm, label: node.bpm.toFraction() }
+    case 'annotation':
+      return { ...base, marker: node.kind, label: node.text }
   }
 }
 
-type Groove = {
-  origin: Fraction
-  cycle: Fraction
-  points: { nominal: Fraction; actual: Fraction; dynamic: Fraction; articulation: Fraction }[]
-}
-
-type GrooveChange = { readonly start: Fraction; readonly groove?: Groove }
-
-type MutableNoteEvent = Omit<
-  BeatTimedNoteEvent,
-  'start' | 'duration' | 'dynamic' | 'automation' | 'origins'
-> & {
-  start: Fraction
-  duration: Fraction
-  dynamic: Fraction
-  directiveState: BeatTimedNoteEvent['directiveState']
-  automation?: BeatTimedNoteEvent['automation']
-  origins: readonly BeatTimedNoteEvent['origins'][number][]
-  groove?: Groove
-  useTimelineGroove: boolean
+type ScheduledNote = {
+  event: BeatTimedNoteEvent
+  timing: PlacedNote
   articulation: Fraction
+  groove?: Groove | null
 }
+type PlaybackScope = { groove?: Groove | null; drones: PlacedNote[] }
 
-type FlatteningState = {
-  active: MutableNoteEvent[]
-  activeStart?: Fraction
-  activeSpan?: Fraction
-  groove?: Groove
-  grooveOverride?: boolean
-  drone?: MutableNoteEvent[]
-}
-
-interface FlatteningScope {
-  readonly start: Fraction
-  readonly state: FlatteningState
-}
-
-function interpolateGroove(
-  groove: Groove,
-  value: Fraction,
-  key: 'actual' | 'dynamic' | 'articulation',
-) {
-  const relative = value.sub(groove.origin)
-  const cycleIndex = relative.div(groove.cycle).floor()
-  const local = relative.sub(groove.cycle.mul(cycleIndex))
-  const points = groove.points
-  let left = points[0]!
-  let right = { ...points[0]!, nominal: groove.cycle, actual: groove.cycle }
-  for (let index = 1; index < points.length; index++) {
-    if (local.compare(points[index]!.nominal) <= 0) {
-      right = points[index]!
-      break
-    }
-    left = points[index]!
+function perform(
+  note: ScheduledNote,
+  timeline: Flattened | undefined,
+  offset: Fraction,
+): BeatTimedNoteEvent {
+  const { timing, articulation } = note
+  const { start, duration, automation, origins } = timing
+  const event = { ...note.event, start, duration, automation, origins }
+  const absolute = start.add(offset)
+  const groove =
+    note.groove === undefined
+      ? timeline?.grooveChanges.findLast((change) => change.start.compare(absolute) <= 0)?.groove
+      : note.groove
+  if (!groove) return { ...event, duration: event.duration.mul(articulation) }
+  const onset = sample(groove, absolute)
+  const release = sample(groove, absolute.add(event.duration))
+  return {
+    ...event,
+    start: onset.beat.sub(offset),
+    duration: release.beat.sub(onset.beat).mul(articulation).mul(onset.articulation),
+    dynamic: event.dynamic.mul(onset.dynamic),
   }
-  const span = right.nominal.sub(left.nominal)
-  const ratio = span.n ? local.sub(left.nominal).div(span) : new Fraction(0)
-  const interpolated = left[key].add(right[key].sub(left[key]).mul(ratio))
-  return key === 'actual'
-    ? groove.origin.add(groove.cycle.mul(cycleIndex)).add(interpolated)
-    : interpolated
 }
 
-function stopDrone(state: FlatteningState, end: Fraction) {
-  for (const event of state.drone ?? []) event.duration = end.sub(event.start)
-  state.drone = undefined
-}
-
-/** Flatten evaluated playback semantics without converting exact beat positions to seconds. */
 export function flattenScoreSemantics(
   shape: ScoreShape,
-  timeline?: BeatEventFlatteningResult,
-  beatOffset = new Fraction(0),
-): BeatEventFlatteningResult {
-  const events: BeatTimedEvent[] = []
+  timeline?: Flattened,
+  beatOffset: Fraction = new Fraction(0),
+): Flattened {
   const diagnostics: Diagnostic[] = []
+  const events: (BeatTimedMarkerEvent | ScheduledNote)[] = []
   const grooveChanges: GrooveChange[] = []
-  const completedAutomations = new WeakSet<MutableNoteEvent>()
-  const evaluate: VisitorEvaluation<ScoreShape, FlatteningScope, Fraction> = (current, visitor) => {
-    const { state } = visitor.scope
-    if (!current.isolatedDirectiveScope) return visitCurrent(current, visitor)
-    const isolatedState = { ...state }
-    const isolatedVisitor = visitor.spawn({ state: isolatedState })
-    const end = visitCurrent(current, isolatedVisitor)
-    if (isolatedState.drone !== state.drone) stopDrone(isolatedState, end)
-    if (isolatedState.groove !== state.groove)
-      grooveChanges.push({ start: copy(end), groove: state.groove })
-    state.active = isolatedState.active
-    state.activeStart = isolatedState.activeStart
-    state.activeSpan = isolatedState.activeSpan
-    return end
+  const scopes: PlaybackScope[] = []
+  let scope: PlaybackScope = { drones: [] }
+  function release(end: Fraction) {
+    for (const drone of scope.drones) drone.duration = end.sub(drone.start)
+    scope.drones = []
   }
-
-  const visitCurrent = (
-    current: ScoreShape,
-    visitor: Visitor<ScoreShape, FlatteningScope, Fraction>,
-  ): Fraction => {
-    const { start, state } = visitor.scope
-    if (current.kind === 'attack') {
-      const event: MutableNoteEvent = {
-        kind: 'note',
-        start: copy(start),
-        duration: copy(current.duration),
-        pitch: current.pitch,
-        rootPitch: current.rootPitch,
-        dynamic: copy((current as typeof current & { readonly velocity: Fraction }).velocity),
-        directiveState: { ...current.directiveState },
-        automation: current.automation,
-        label: current.authoredLabel ?? current.displayLabel,
-        origins: current.origins,
-        ...(current.expansionPath && { expansionPath: current.expansionPath }),
-        groove: state.groove,
-        useTimelineGroove: !state.grooveOverride,
-        articulation: current.articulation ?? new Fraction(1),
-      }
-      events.push(event)
-      state.active = [event]
-      state.activeStart = copy(start)
-      state.activeSpan = copy(current.duration)
-    } else if (current.kind === 'continue') {
-      if (!state.active.length) {
-        diagnostics.push({
-          code: 'XP_CONTINUE_WITHOUT_ATTACK',
-          severity: 'error',
-          message: 'A continuation requires an active note.',
-          locations: current.origins.map((origin) => origin.location),
-        })
-      } else {
-        const activeStart = state.activeStart ?? state.active[0]!.start
-        const activeSpan = state.activeSpan ?? current.duration
-        const scale = activeSpan.add(current.duration).div(activeSpan)
-        for (const event of state.active) {
-          event.start = activeStart.add(event.start.sub(activeStart).mul(scale))
-          event.duration = event.duration.mul(scale)
-          if (current.extendsAutomation === false) completedAutomations.add(event)
-          if (event.automation && !completedAutomations.has(event))
-            event.automation = {
-              ...event.automation,
-              duration: copy(event.duration),
-            }
-          event.origins = [...event.origins, ...current.origins]
-        }
-        state.activeSpan = activeSpan.add(current.duration)
-      }
-    } else if (current.kind === 'rest') {
-      state.active = []
-      state.activeStart = undefined
-      state.activeSpan = undefined
-    } else if (current.kind === 'groove') {
-      state.grooveOverride = true
-      if (!current.template) {
-        state.groove = undefined
-        grooveChanges.push({ start: copy(start) })
-      } else {
-        const flattened = flattenScoreSemantics(current.template)
-        diagnostics.push(...flattened.diagnostics)
-        const controls = flattened.score.events.filter(
-          (event): event is BeatTimedNoteEvent => event.kind === 'note',
-        )
-        if (
-          !flattened.diagnostics.some(({ severity }) => severity === 'error') &&
-          controls.length >= 2 &&
-          flattened.score.duration.compare(0) > 0
-        ) {
-          const cycle = flattened.score.duration
-          state.groove = {
-            origin: copy(start),
-            cycle,
-            points: controls.map((control, index) => {
-              const nextStart = controls[index + 1]?.start ?? cycle
-              const occupied = nextStart.sub(control.start)
-              return {
-                nominal: cycle.mul(index).div(controls.length),
-                actual: control.start,
-                dynamic: control.dynamic,
-                articulation: occupied.n ? control.duration.div(occupied) : new Fraction(1),
-              }
-            }),
+  layoutNotes(shape, {
+    enterScope() {
+      scopes.push(scope)
+      scope = { groove: scope.groove, drones: [] }
+    },
+    leaveScope(end) {
+      release(end)
+      const previous = scope.groove
+      scope = scopes.pop()!
+      if (scope.groove !== previous)
+        grooveChanges.push({ start: end.add(beatOffset), groove: scope.groove ?? undefined })
+    },
+    orphan(node) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'XP_CONTINUE_WITHOUT_ATTACK',
+        message: 'A continuation requires an active note.',
+        locations: node.origins.map((origin) => origin.location),
+      })
+    },
+    attack(node, timing) {
+      const dynamic =
+        (node as AttackShape & { velocity?: Fraction }).velocity ?? DYNAMIC_VELOCITIES.mf
+      events.push({
+        timing,
+        groove: scope.groove,
+        articulation: node.articulation ?? one,
+        event: {
+          kind: 'note',
+          start: timing.start,
+          duration: timing.duration,
+          dynamic,
+          directiveState: node.directiveState,
+          pitch: node.pitch,
+          rootPitch: node.rootPitch,
+          label: node.authoredLabel ?? node.displayLabel,
+          origins: node.origins,
+          ...(node.expansionPath && { expansionPath: node.expansionPath }),
+        },
+      })
+    },
+    control(node, start, sound) {
+      if (node.kind === 'groove' || node.kind === 'drone') {
+        const template = node.template && flattenScoreSemantics(node.template)
+        if (template) diagnostics.push(...template.diagnostics)
+        if (node.kind === 'groove') {
+          const absolute = start.add(beatOffset)
+          scope.groove = template ? (buildGroove(template.score, absolute) ?? null) : null
+          grooveChanges.push({ start: absolute, groove: scope.groove ?? undefined })
+        } else {
+          release(start)
+          for (const event of template?.score.events ?? []) {
+            if (event.kind !== 'note') continue
+            const timing = sound(
+              { ...event, duration: new Fraction(0), origins: [...node.origins, ...event.origins] },
+              start,
+            )
+            scope.drones.push(timing)
+            events.push({ timing, groove: scope.groove, articulation: one, event })
           }
-          grooveChanges.push({ start: copy(start), groove: state.groove })
         }
-      }
-    } else if (current.kind === 'drone') {
-      stopDrone(state, start)
-      if (current.template) {
-        const flattened = flattenScoreSemantics(current.template)
-        diagnostics.push(...flattened.diagnostics)
-        state.drone = flattened.score.events
-          .filter((event): event is BeatTimedNoteEvent => event.kind === 'note')
-          .map((event): MutableNoteEvent => {
-            const drone: MutableNoteEvent = {
-              ...event,
-              // The expression selects the drone's notes; its internal rhythm does not
-              // delay their attacks because every selected note begins with the directive.
-              start: copy(start),
-              duration: new Fraction(0),
-              dynamic: copy(event.dynamic),
-              origins: [...current.origins, ...event.origins],
-              articulation: new Fraction(1),
-              groove: state.groove,
-              useTimelineGroove: !state.grooveOverride,
-            }
-            events.push(drone)
-            return drone
-          })
-      }
-    } else if (
-      current.kind === 'barline' ||
-      current.kind === 'annotation' ||
-      current.kind === 'dynamic' ||
-      current.kind === 'time-signature' ||
-      current.kind === 'tempo'
-    ) {
-      events.push(timedMarker(current, start))
-    } else if (current.kind === 'clef' || current.kind === 'key-signature') {
-      // Clefs and signatures are engraving-only context and deliberately do not enter playback.
-    } else if (current.kind === 'sequence') {
-      const firstEvent = events.length
-      let cursor = start
-      for (const child of current.children) cursor = visitor.visit(child, { start: cursor })
-      if (current.normalized || current.continuationTarget === 'all') {
-        state.active = events
-          .slice(firstEvent)
-          .filter((event): event is MutableNoteEvent => event.kind === 'note')
-        state.activeStart = current.normalized ? copy(start) : undefined
-        state.activeSpan = current.normalized ? copy(current.duration) : undefined
-      }
-      return start.add(current.duration)
-    } else {
-      const firstEvent = events.length
-      const states = current.branches.map((): FlatteningState => ({
-        active: [],
-        groove: state.groove,
-        grooveOverride: state.grooveOverride,
-      }))
-      current.branches.forEach((branch, index) => visitor.visit(branch, { state: states[index]! }))
-      const end = start.add(current.duration)
-      for (const branchState of states) {
-        stopDrone(branchState, end)
-        if (branchState.groove !== state.groove)
-          grooveChanges.push({ start: copy(end), groove: state.groove })
-      }
-      // A continuation after a parallel distributes over every attack in the
-      // construction, rather than only the last attack in each branch.
-      state.active = events
-        .slice(firstEvent)
-        .filter((event): event is MutableNoteEvent => event.kind === 'note')
-      // Unlike a normalized sequence, an uneven parallel has no single active
-      // span: only the final notes of its longest branches remain active.
-      state.activeStart = undefined
-      state.activeSpan = undefined
-      return end
-    }
-    return start.add(current.duration)
+      } else if (node.kind !== 'clef' && node.kind !== 'key-signature')
+        events.push(marker(node, start))
+    },
+  })
+  release(shape.duration)
+  return {
+    score: {
+      duration: shape.duration,
+      events: events
+        .map((entry) => ('event' in entry ? perform(entry, timeline, beatOffset) : entry))
+        .sort((a, b) => a.start.compare(b.start)),
+    },
+    diagnostics,
+    grooveChanges: grooveChanges.sort((a, b) => a.start.compare(b.start)),
   }
-
-  const rootState: FlatteningState = { active: [] }
-  const clipOrigin = new Fraction(0)
-  const visitor = new Visitor(evaluate, { start: clipOrigin, state: rootState })
-  const end = visitor.visit(shape)
-  stopDrone(rootState, end)
-  for (const event of events) {
-    if (event.kind !== 'note') continue
-    const mutable = event as MutableNoteEvent
-    const nominalStart = mutable.start
-    const nominalEnd = nominalStart.add(mutable.duration)
-    const groove =
-      mutable.groove ??
-      (timeline && mutable.useTimelineGroove
-        ? grooveAt(timeline.grooveChanges, nominalStart.add(beatOffset))
-        : undefined)
-    if (groove) {
-      const grooveOffset = mutable.groove ? clipOrigin : beatOffset
-      const grooveStart = nominalStart.add(grooveOffset)
-      const grooveEnd = nominalEnd.add(grooveOffset)
-      const warpedStart = interpolateGroove(groove, grooveStart, 'actual').sub(grooveOffset)
-      const warpedEnd = interpolateGroove(groove, grooveEnd, 'actual').sub(grooveOffset)
-      mutable.start = warpedStart
-      mutable.duration = warpedEnd
-        .sub(warpedStart)
-        .mul(mutable.articulation)
-        .mul(interpolateGroove(groove, grooveStart, 'articulation'))
-      mutable.dynamic = mutable.dynamic.mul(
-        interpolateGroove(groove, grooveStart, 'dynamic').div(DYNAMIC_VELOCITIES.mf),
-      )
-    } else mutable.duration = mutable.duration.mul(mutable.articulation)
-    delete mutable.groove
-    delete (mutable as Partial<MutableNoteEvent>).useTimelineGroove
-    delete (mutable as Partial<MutableNoteEvent>).articulation
-  }
-  events.sort((left, right) => left.start.compare(right.start))
-  return { score: { duration: copy(shape.duration), events }, diagnostics, grooveChanges }
 }
 
-const grooveAt = (changes: readonly GrooveChange[], absoluteBeat: Fraction): Groove | undefined => {
-  let groove: Groove | undefined
-  for (const change of changes) {
-    if (change.start.compare(absoluteBeat) > 0) break
-    groove = change.groove
-  }
-  return groove
-}
-
-/** Expand repeats, evaluate score semantics, then produce exact beat-timed events. */
 export function expandToBeatEvents(
   program: Program,
   options: BeatEventExpansionOptions = {},
 ): BeatEventExpansionResult {
-  const evaluated = evaluateProgramSemantics(program, options)
-  const diagnostics = [...evaluated.diagnostics]
-  if (!('shape' in evaluated)) return { diagnostics }
-  const initializationShape = options.initialization?.shape
-  const timelineShape = options.initialization?.timelineShape
-  const shape = initializationShape
+  const result = evaluateProgramSemantics(program, options)
+  if (!('shape' in result)) return { diagnostics: result.diagnostics }
+  const { shape: setup, timelineShape } = options.initialization ?? {}
+  const timeline = timelineShape && flattenScoreSemantics(timelineShape)
+  const shape: ScoreShape = setup
     ? {
-        kind: 'sequence' as const,
-        duration: evaluated.shape.duration,
-        origins: [...initializationShape.origins, ...evaluated.shape.origins],
-        children: [initializationShape, evaluated.shape],
+        kind: 'sequence',
+        children: [setup, result.shape],
+        duration: result.shape.duration,
+        origins: [],
       }
-    : evaluated.shape
-  const timeline = timelineShape?.duration.n ? flattenScoreSemantics(timelineShape) : undefined
-  const flattened = flattenScoreSemantics(shape, timeline, options.beatOffset ?? new Fraction(0))
-  const allDiagnostics = [
-    ...diagnostics,
+    : result.shape
+  const played = flattenScoreSemantics(shape, timeline, options.beatOffset)
+  const diagnostics = [
+    ...result.diagnostics,
     ...(timeline?.diagnostics ?? []),
-    ...flattened.diagnostics,
+    ...played.diagnostics,
   ]
-  return allDiagnostics.some((diagnostic) => diagnostic.severity === 'error')
-    ? { diagnostics: allDiagnostics }
-    : { score: flattened.score, diagnostics: allDiagnostics }
+  return diagnostics.some((d) => d.severity === 'error')
+    ? { diagnostics }
+    : { score: played.score, diagnostics }
 }

@@ -33,6 +33,18 @@ function notes(source: string, initialization: ScoreInitialization, offset?: Fra
 }
 
 describe('global grid context', () => {
+  it('applies groove changes from layered timelines at their absolute beats', () => {
+    const parent = initialize('. @groove([C= C]) ...')
+    const layer = evaluateInitialization(parse('@groove([C C=]) ....'), {
+      initialization: parent,
+      allowDuration: true,
+    })
+    expect(layer.diagnostics).toEqual([])
+    expect(
+      notes('[C D] [E F]', layer.initialization!).map(({ start }) => start.toFraction()),
+    ).toEqual(['0', '1/3', '1', '5/3'])
+  })
+
   it('keeps the global groove on the absolute grid around a function-local groove', () => {
     const initialization = initialize('@groove([C= C]) ..')
     const offset = new Fraction(1, 2)
@@ -97,17 +109,27 @@ for (value of [true]) { chosen <- value $ . }
     ])
   })
 
-  it('evaluates the actual expression when a global function changes its score shape', () => {
-    const initialization = initialize('fn phrase() { ret C } . fn phrase() { ret D E }')
-    expect(
-      notes('phrase() phrase()', initialization).map(({ label, start }) => [
-        label,
-        start.toFraction(),
-      ]),
-    ).toEqual([
-      ['C', '0'],
-      ['D', '1'],
-      ['E', '2'],
+  it('evaluates the actual expression when a reassigned variable changes its score shape', () => {
+    const initialization = initialize('let phrase <- C $ . $ phrase <- (D E)')
+    const result = notes('phrase phrase', initialization)
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1', '2'])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual(
+      notes('C D E', initialization).map(({ pitch }) => pitch.value.valueOf()),
+    )
+  })
+
+  it('rejects redeclaring a function at another beat in one timeline', () => {
+    const source = 'fn phrase() { ret C } . fn phrase() { ret E }'
+    const result = evaluateInitialization(parse(source), { allowDuration: true })
+    expect(result.initialization).toBeUndefined()
+    expect(result.diagnostics).toMatchObject([
+      {
+        code: 'XP_DUPLICATE_FUNCTION',
+        locations: [
+          { start: { offset: source.lastIndexOf('phrase') } },
+          { start: { offset: source.indexOf('phrase') } },
+        ],
+      },
     ])
   })
 
@@ -171,6 +193,43 @@ for (value of [true]) { chosen <- value $ . }
     expect(result[0]!.pitch.value.equals(result[1]!.pitch.value)).toBe(false)
   })
 
+  it.each([
+    '(. 1d, D) =',
+    '(D, . 1d)=',
+    '(. 1d, D) @p $ =',
+    'let phrase <- (. 1d, D) $ phrase =',
+    'fn phrase() { ret (. 1d, D) } $ phrase()=',
+  ])('uses the global context at the expanded note in %s', (source) => {
+    const initialization = initialize('... {24edo}')
+    const result = notes(source, initialization, new Fraction(1))
+    const reference = notes('1d', initialization, new Fraction(3))[0]!
+    expect(result[1]?.start.toFraction()).toBe('2')
+    expect(result[1]?.pitch.value.equals(reference.pitch.value)).toBe(true)
+    expect(reference.pitch.value.valueOf()).toBe(50)
+  })
+
+  it('reads a reassigned global variable at the expanded beat of its attack', () => {
+    const initialization = initialize('let phrase <- C $ .. $ phrase <- E')
+    const result = notes('(. phrase, D) =', initialization)
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '2'])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual(
+      notes('D E', initialization).map(({ pitch }) => pitch.value.valueOf()),
+    )
+  })
+
+  it('looks up the timeline separately for each expanded repeat occurrence', () => {
+    const initialization = initialize('@time(3/4) ..... {24edo}')
+    const result = notes('|: (. 1d, D)= :|', initialization)
+    expect(
+      result
+        .filter(({ label }) => label === '1d')
+        .map(({ start, pitch }) => [start.toFraction(), pitch.value.valueOf()]),
+    ).toEqual([
+      ['2', 100],
+      ['5', 50],
+    ])
+  })
+
   it('keeps ordinary group attacks on their original global context positions', () => {
     const initialization = initialize('. [. {5edo} .]')
     const result = notes('(D D D)==', initialization)
@@ -190,15 +249,15 @@ for (value of [true]) { chosen <- value $ . }
     )
   })
 
-  it('settles normalized timing when a global function changes its length', () => {
-    const global = initialize('fn phrase() { ret C } [. fn phrase() { ret D E } ..]')
-    const result = notes('[phrase() phrase()]', global)
+  it('settles normalized timing when a reassigned variable changes its length', () => {
+    const global = initialize('let phrase <- C $ [. $ phrase <- (D E) $ ..]')
+    const result = notes('[phrase phrase]', global)
     expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1/3', '2/3'])
   })
 
   it('diagnoses a normalized rhythm with no consistent placement of a global switch', () => {
-    const global = initialize('fn phrase() { ret C } [. fn phrase() { ret D E } .]')
-    const result = expandToBeatEvents(parse('[phrase() phrase()]'), { initialization: global })
+    const global = initialize('let phrase <- C $ [. $ phrase <- (D E) $ .]')
+    const result = expandToBeatEvents(parse('[phrase phrase]'), { initialization: global })
     expect(result).not.toHaveProperty('score')
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'XP_TIMELINE_LAYOUT' }),

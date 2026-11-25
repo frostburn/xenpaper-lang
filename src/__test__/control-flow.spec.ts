@@ -192,6 +192,19 @@ ${builtin}(${parameters} => fail(item), ${arguments_})`
 
 describe('score control flow', () => {
   it.each([
+    'fn phrase() { ret C } $ let note <- C $ fn phrase() { ret D }',
+    'fn phrase() { ret C } || fn phrase() { ret D }',
+    'fn outer() { fn phrase() { ret C } $ fn phrase() { ret D } $ ret phrase() } $ outer()',
+    '|: fn phrase() { ret C } $ phrase() :|',
+  ])('rejects function redeclaration in %s', (source) => {
+    const result = expandToBeatEvents(parse(source))
+    expect(result).not.toHaveProperty('score')
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'XP_DUPLICATE_FUNCTION', severity: 'error' }),
+    )
+  })
+
+  it.each([
     ['if(false @and missing()) { C } else { D }', 'D'],
     ['if(true @or missing()) { C } else { D }', 'C'],
     ['if(true @or false @and missing()) { C }', 'C'],
@@ -206,6 +219,7 @@ describe('score control flow', () => {
     ['fn choose() { for(item of [C D]) { ret item } } $ choose()', 'C'],
     ['fn choose() { while(true) { ret D } } $ choose()', 'D'],
     ['fn choose() { ret C $ throw(<<unreachable>>) } $ choose()', 'C'],
+    ['fn phrase() { ret C } $ (fn phrase() { ret D } $ phrase()) phrase()', 'D C'],
     ['try { C throw(«error») E } catch(message) { if(message @eq <<error>>) { D } } F', 'D F'],
     ['try { C D } catch { E } F', 'C D F'],
     ['try { let bad <- 1 / 0 } catch { D }', 'D'],
@@ -218,7 +232,15 @@ describe('score control flow', () => {
       'D',
     ],
     ['fn choose() { try { ret C } catch { ret D } } $ choose()', 'C'],
+    [
+      'fn choose(note) { try { try { note <- D } catch { ret F } $ ret missingName } catch { ret note } } $ choose(C)',
+      'C',
+    ],
     ['fn choose() { try { ret missingName } catch { ret C } } $ choose()', 'C'],
+    [
+      'fn runaway() { ret runaway() } $ fn choose() { try { missingTarget <- runaway() } catch { ret C } } $ choose()',
+      'C',
+    ],
     [
       'fn choose(note) { try { note <- E $ ret (F . missingName) } catch { ret note . D } } $ choose(C)',
       'C . D',

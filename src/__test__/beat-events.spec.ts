@@ -366,6 +366,12 @@ describe('beat event expansion', () => {
     ['(1, 2, 3)==', ['0', '0', '0'], ['3', '3', '3'], '3'],
     ['let phrase <- (1, 2, 3)== $ phrase', ['0', '0', '0'], ['3', '3', '3'], '3'],
     ['(1, 2 3)=', ['0', '0', '2'], ['2', '2', '2'], '3'],
+    ['(. C, . D) =', ['1', '1'], ['2', '2'], '3'],
+    ['(.. C, . D) =', ['1', '3'], ['2', '2'], '4'],
+    ['(. D, .. C) =', ['1', '3'], ['2', '2'], '4'],
+    ['[. C, . D] =', ['1/2', '1/2'], ['1', '1'], '2'],
+    ['[. C . D] =', ['1/2', '3/2'], ['1/2', '1/2'], '2'],
+    ['((. C) -> D) =', ['1', '3'], ['2', '2'], '4'],
     ['[0, 4 7]=!', ['0', '0', '1'], ['2', '2', '1'], '2'],
     ['(0, 4 7)=!', ['0', '0', '2'], ['3', '3', '1'], '3'],
     ['[0, 4 7]==!', ['0', '0', '3/2'], ['3', '3', '3/2'], '3'],
@@ -461,6 +467,19 @@ describe('beat event expansion', () => {
     expect(notes[3]!.origins.map((origin) => origin.role)).toEqual(['literal', 'duration'])
   })
 
+  it('can continue an attack whose entire original duration was removed', () => {
+    const result = score('(C?) = D')
+    expect(
+      result.events.map((note) => [
+        note.start.toFraction(),
+        note.kind === 'note' && note.duration.toFraction(),
+      ]),
+    ).toEqual([
+      ['0', '1'],
+      ['1', '1'],
+    ])
+  })
+
   it('rejects a continuation without an active note', () => {
     const result = expandToBeatEvents(parse('= C'))
 
@@ -523,7 +542,7 @@ describe('beat event expansion', () => {
       'let division <- division + 1 $ @subdivision(division) C',
       'D',
     ],
-    ['function declarations', '', 'fn phrase() { ret C D } phrase()', 'phrase()'],
+    ['scoped function declarations', '', '(fn phrase() { ret C D } phrase())', 'F'],
   ])('matches authored copies for %s', (_description, prefix, repeatedBody, suffix) => {
     const repeated = `${prefix} |: ${repeatedBody} :| ${suffix}`
     const authored = `${prefix} ${repeatedBody} ${repeatedBody} ${suffix}`

@@ -721,3 +721,12 @@ export class Value {
     return `${this.valueOf()} [${this.dimensions}]`
   }
 }
+
+/** Check exact rationality without narrowing the numerator and denominator to safe integers. */
+export function isPositiveRationalRatio(value: Value): boolean {
+  return (
+    value.magnitude.kind === 'exact' &&
+    value.isPositiveExactRatio() &&
+    [...value.magnitude.value.exponents.values()].every((power) => new Fraction(power).d === 1)
+  )
+}

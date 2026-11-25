@@ -1,6 +1,5 @@
-import type { Expression } from '../parser.js'
-import type { Diagnostic } from '../diagnostics.js'
-import { catchableDiagnostic } from '../diagnostics.js'
+import type { Expression, Identifier, Node } from '../parser.js'
+import { catchableDiagnostic, EvaluationError, type Diagnostic } from '../diagnostics.js'
 import { Value } from '../value.js'
 import {
   evaluateDeclaration,
@@ -9,224 +8,209 @@ import {
   isTruthy,
   stringValue,
 } from './expressions.js'
-import { extendLexicalEnvironment } from './types.js'
-import type { EvaluatedLiteral, LexicalEnvironment, PitchContext, PrimeMapping } from './types.js'
+import {
+  extendLexicalEnvironment,
+  type EvaluatedLiteral,
+  type LexicalEnvironment,
+  type PitchContext,
+  type PrimeMapping,
+} from './types.js'
 
 export type FunctionBindings = WeakMap<LexicalEnvironment, Map<string, EvaluatedLiteral>>
-
-type Jump = 'break' | 'continue'
-type Completion<Result> = { scope: LexicalEnvironment; jump?: Jump; returned?: Result }
-
-export type ReturnEvaluator<Result> = (
+export type ReturnEvaluator<R> = (
   expression: Expression,
   scope: LexicalEnvironment,
   protectedReturn: boolean,
-) => Result
+) => R
+type Frame = { scope: LexicalEnvironment; declarationScope: object }
+type Transfer<R> =
+  | { kind: 'return'; result: R }
+  | { kind: 'jump'; jump: Extract<Expression, { type: 'LoopJump' }> }
 
-/** Execute function statements, including return operands reached inside a handler's trial. */
-export function executeFunctionStatements<Result extends { diagnostics: readonly Diagnostic[] }>(
+export function executeFunctionStatements<R extends { diagnostics: readonly Diagnostic[] }>(
   statements: readonly Expression[],
   mapping: PrimeMapping | PitchContext,
   environment: LexicalEnvironment,
   bindings: FunctionBindings,
   budget: { remaining: number },
-  evaluateReturn: ReturnEvaluator<Result>,
-): { environment?: LexicalEnvironment; returned?: Result; diagnostics: Diagnostic[] } {
+  evaluateReturn: ReturnEvaluator<R>,
+): { environment?: LexicalEnvironment; returned?: R; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = []
-  const finalStatement = statements.at(-1)
-  const abort = Symbol('function statement error')
-  const fail = (node: Expression, code: string, message: string): never => {
-    diagnostics.push({ code, severity: 'error', message, locations: [node.location] })
-    throw abort
+  // Record writes to this call's locals so an enclosing handler can undo them,
+  // including writes made by a nested try that completed successfully.
+  let journal:
+    | { names: Map<string, EvaluatedLiteral>; name: string; previous: EvaluatedLiteral }[]
+    | undefined
+  function fail(node: Node, code: string, message: string): never {
+    throw new EvaluationError([{ code, message, severity: 'error', locations: [node.location] }])
   }
-  const spend = (node: Expression) => {
+  function spend(node: Node) {
     if (--budget.remaining < 0)
       fail(node, 'XP_EXPANSION_LIMIT', 'Function execution exceeded the statement expansion limit.')
   }
-  const evaluate = (node: Expression, scope: LexicalEnvironment): EvaluatedLiteral => {
-    const evaluated = evaluateExpression(node, mapping, scope)
-    diagnostics.push(...evaluated.diagnostics)
-    if (!('value' in evaluated)) throw abort
-    return evaluated.value
+  function read(node: Expression, frame: Frame): EvaluatedLiteral {
+    const result = evaluateExpression(node, mapping, frame.scope)
+    if (!('value' in result)) throw new EvaluationError(result.diagnostics)
+    diagnostics.push(...result.diagnostics)
+    return result.value
   }
-
-  const run = (
-    items: readonly Expression[],
-    scope: LexicalEnvironment,
-    inLoop: boolean,
-    protectedReturn: boolean,
-  ): Completion<Result> => {
-    for (const statement of items) {
-      // The caller's terminal return operand has always been outside the statement budget.
-      if (statement.type !== 'ReturnStatement' || statement !== finalStatement) spend(statement)
-      switch (statement.type) {
-        case 'Sequence': {
-          const nested = run(statement.items, scope, inLoop, protectedReturn)
-          if (nested.jump || nested.returned) return nested
-          scope = nested.scope
-          break
-        }
-        case 'VariableDeclaration':
-        case 'FunctionDeclaration': {
-          const declared = evaluateDeclaration(statement, mapping, scope)
-          diagnostics.push(...declared.diagnostics)
-          if (declared.diagnostics.some(({ severity }) => severity === 'error')) throw abort
-          scope = declared.environment
-          if (statement.type === 'VariableDeclaration') {
-            const variables = new Map(scope.variables)
-            scope = { ...scope, variables }
-            bindings.set(scope, variables)
-          }
-          break
-        }
-        case 'BindingAssignment': {
-          const { name } = statement.name
-          let target: LexicalEnvironment | undefined = scope
-          while (target && !target.variables.has(name) && !target.functions.has(name))
-            target = target.parent
-          const variables = target && bindings.get(target)
-          if (!variables?.has(name))
-            return fail(
-              statement.name,
-              'XP_ASSIGNMENT',
-              `Assignment requires a local variable or parameter named ${name}.`,
-            )
-          variables.set(name, evaluate(statement.value, scope))
-          break
-        }
-        case 'ThrowStatement':
-          diagnostics.push(...evaluateThrow(statement, mapping, scope))
-          throw abort
-        case 'ReturnStatement': {
-          const returned = evaluateReturn(statement.value, scope, protectedReturn)
-          if (
-            protectedReturn &&
-            returned.diagnostics.some(({ severity }) => severity === 'error')
-          ) {
-            diagnostics.push(...returned.diagnostics)
-            throw abort
-          }
-          return { scope, returned }
-        }
-        case 'LoopJump':
-          if (!inLoop)
-            fail(
-              statement,
-              'XP_LOOP_JUMP',
-              `${statement.action} requires an enclosing loop body in the same function.`,
-            )
-          return { scope, jump: statement.action }
-        case 'IfBlock': {
-          const branch = isTruthy(evaluate(statement.condition, scope))
-            ? statement.consequent
-            : statement.alternate
-          if (branch) {
-            const branchResult = run([branch], scope, inLoop, protectedReturn)
-            if (branchResult.returned) return branchResult
-            if (branchResult.jump) return { scope, jump: branchResult.jump }
-          }
-          break
-        }
-        case 'TryBlock': {
-          const start = diagnostics.length
-          const snapshots = new Map<Map<string, EvaluatedLiteral>, Map<string, EvaluatedLiteral>>()
-          for (let frame: LexicalEnvironment | undefined = scope; frame; frame = frame.parent) {
-            const variables = bindings.get(frame)
-            if (variables) snapshots.set(variables, new Map(variables))
-          }
-          try {
-            const trial = run(statement.body.items, scope, inLoop, true)
-            if (trial.returned) return trial
-            if (trial.jump) return { scope, jump: trial.jump }
-          } catch (error) {
-            if (error !== abort) throw error
-            const failure = catchableDiagnostic(diagnostics.slice(start))
-            if (!failure) throw error
-            diagnostics.length = start
-            for (const [variables, saved] of snapshots)
-              for (const [name, value] of saved) variables.set(name, value)
-            const name = statement.name
-            let handlerScope = scope
-            if (name) {
-              const variables = new Map<string, EvaluatedLiteral>([
-                [
-                  name.name,
-                  stringValue(failure.message, [{ location: name.location, role: 'structural' }]),
-                ],
-              ])
-              handlerScope = extendLexicalEnvironment(scope, { variables })
-              bindings.set(handlerScope, variables)
-            }
-            const handler = run(statement.handler.items, handlerScope, inLoop, protectedReturn)
-            if (handler.returned) return handler
-            if (handler.jump) return { scope, jump: handler.jump }
-          }
-          break
-        }
-        case 'ForBlock':
-        case 'WhileBlock': {
-          let broke = false
-          if (statement.type === 'ForBlock') {
-            const iterable = evaluate(statement.iterable, scope)
-            if (iterable.kind !== 'container')
-              return fail(
-                statement.iterable,
-                'XP_NOT_ITERABLE',
-                `for ${statement.mode} requires a container.`,
-              )
-            for (const [index, item] of iterable.values.entries()) {
-              spend(statement)
-              const value: EvaluatedLiteral =
-                statement.mode === 'in'
-                  ? { kind: 'scalar', value: new Value(index), origins: [] }
-                  : item
-              const variables = new Map([[statement.name.name, value]])
-              const inner = extendLexicalEnvironment(scope, { variables })
-              bindings.set(inner, variables)
-              const iteration = run(statement.body.items, inner, true, protectedReturn)
-              if (iteration.returned) return iteration
-              if (iteration.jump === 'break') {
-                broke = true
-                break
-              }
-            }
-          } else {
-            let inner = scope
-            for (;;) {
-              spend(statement)
-              if (!isTruthy(evaluate(statement.condition, inner))) break
-              const iteration = run(statement.body.items, inner, true, protectedReturn)
-              if (iteration.returned) return iteration
-              inner = iteration.scope
-              if (iteration.jump === 'break') {
-                broke = true
-                break
-              }
-            }
-          }
-          if (!broke && statement.alternate) {
-            const alternate = run(statement.alternate.items, scope, inLoop, protectedReturn)
-            if (alternate.returned) return alternate
-            if (alternate.jump) return { scope, jump: alternate.jump }
-          }
-          break
-        }
-        default:
-          fail(
-            statement,
-            'XP_FUNCTION_STATEMENT',
-            `${statement.type} cannot be executed before ret in a function.`,
-          )
-      }
+  function bind(scope: LexicalEnvironment, id: Identifier, value: EvaluatedLiteral): Frame {
+    const variables = new Map([[id.name, value]])
+    const child = extendLexicalEnvironment(scope, { variables })
+    bindings.set(child, variables)
+    return { scope: child, declarationScope: {} }
+  }
+  function block(nodes: readonly Expression[], frame: Frame): Transfer<R> | undefined {
+    for (const node of nodes) {
+      const completion = execute(node, frame)
+      if (completion) return completion
     }
-    return { scope }
   }
-
+  function execute(node: Expression, frame: Frame): Transfer<R> | undefined {
+    spend(node)
+    switch (node.type) {
+      case 'Sequence':
+        return block(node.items, frame)
+      case 'FunctionDeclaration':
+      case 'VariableDeclaration': {
+        const declared = evaluateDeclaration(node, mapping, frame.scope, frame.declarationScope)
+        if (declared.diagnostics.some((d) => d.severity === 'error'))
+          throw new EvaluationError(declared.diagnostics)
+        diagnostics.push(...declared.diagnostics)
+        frame.scope = declared.environment
+        if (node.type === 'VariableDeclaration') {
+          const variables = new Map(frame.scope.variables)
+          frame.scope = { ...frame.scope, variables }
+          bindings.set(frame.scope, variables)
+        }
+        return
+      }
+      case 'BindingAssignment': {
+        const name = node.name.name
+        for (let scope: LexicalEnvironment | undefined = frame.scope; scope; scope = scope.parent) {
+          if (scope.functions.has(name)) break
+          if (!scope.variables.has(name)) continue
+          const names = bindings.get(scope)
+          if (!names) break
+          const value = read(node.value, frame)
+          journal?.push({ names, name, previous: names.get(name)! })
+          names.set(name, value)
+          return
+        }
+        return fail(
+          node.name,
+          'XP_ASSIGNMENT',
+          `Assignment requires a local variable or parameter named ${name}.`,
+        )
+      }
+      case 'ReturnStatement': {
+        const result = evaluateReturn(node.value, frame.scope, journal !== undefined)
+        if (journal && result.diagnostics.some((d) => d.severity === 'error'))
+          throw new EvaluationError(result.diagnostics)
+        return { kind: 'return', result }
+      }
+      case 'LoopJump':
+        return { kind: 'jump', jump: node }
+      case 'ThrowStatement':
+        throw new EvaluationError(evaluateThrow(node, mapping, frame.scope))
+      case 'IfBlock': {
+        const branch = isTruthy(read(node.condition, frame)) ? node.consequent : node.alternate
+        if (branch) return execute(branch, { ...frame, declarationScope: {} })
+        return
+      }
+      case 'TryBlock': {
+        const enclosing = journal
+        const writes = journal ?? []
+        const checkpoint = writes.length
+        const warnings = diagnostics.length
+        journal = writes
+        try {
+          return block(node.body.items, { ...frame, declarationScope: {} })
+        } catch (error) {
+          if (!(error instanceof EvaluationError)) throw error
+          const failure = catchableDiagnostic(error.diagnostics)
+          if (!failure) throw error
+          for (let i = writes.length - 1; i >= checkpoint; --i) {
+            const { names, name, previous } = writes[i]!
+            names.set(name, previous)
+          }
+          writes.length = checkpoint
+          diagnostics.length = warnings
+          journal = enclosing
+          const handler = node.name
+            ? bind(
+                frame.scope,
+                node.name,
+                stringValue(failure.message, [
+                  { role: 'structural', location: node.name.location },
+                ]),
+              )
+            : { ...frame, declarationScope: {} }
+          return block(node.handler.items, handler)
+        } finally {
+          journal = enclosing
+        }
+      }
+      case 'WhileBlock':
+      case 'ForBlock': {
+        const local = { ...frame }
+        const iterable = node.type === 'ForBlock' ? read(node.iterable, frame) : undefined
+        if (node.type === 'ForBlock' && iterable?.kind !== 'container')
+          return fail(node.iterable, 'XP_NOT_ITERABLE', `for ${node.mode} requires a container.`)
+        for (let i = 0; ; i++) {
+          let iteration: Frame
+          if (node.type === 'WhileBlock') {
+            spend(node)
+            if (!isTruthy(read(node.condition, local))) break
+            iteration = { ...local, declarationScope: {} }
+          } else {
+            if (iterable?.kind !== 'container' || i >= iterable.values.length) break
+            spend(node)
+            const item =
+              node.mode === 'of'
+                ? iterable.values[i]!
+                : {
+                    kind: 'scalar' as const,
+                    value: new Value(i),
+                    origins: [{ role: 'structural' as const, location: node.name.location }],
+                  }
+            iteration = bind(frame.scope, node.name, item)
+          }
+          const completion = block(node.body.items, iteration)
+          if (node.type === 'WhileBlock') local.scope = iteration.scope
+          if (completion?.kind === 'return') return completion
+          if (completion?.jump.action === 'break') return
+        }
+        if (node.alternate) return block(node.alternate.items, { ...frame, declarationScope: {} })
+        return
+      }
+      default:
+        return fail(
+          node,
+          'XP_FUNCTION_STATEMENT',
+          `${node.type} cannot be executed before ret in a function.`,
+        )
+    }
+  }
+  const frame: Frame = { scope: environment, declarationScope: {} }
   try {
-    const completed = run(statements, environment, false, false)
-    return { environment: completed.scope, returned: completed.returned, diagnostics }
+    // The top-level trailing ret is the call's result operand. Earlier returns
+    // and loop condition checks count as executed statements.
+    const tail = statements.at(-1)
+    const hasOperand = tail?.type === 'ReturnStatement'
+    const completion = block(hasOperand ? statements.slice(0, -1) : statements, frame)
+    if (completion?.kind === 'jump')
+      fail(
+        completion.jump,
+        'XP_LOOP_JUMP',
+        `${completion.jump.action} requires an enclosing loop body in the same function.`,
+      )
+    const returned =
+      completion?.result ??
+      (hasOperand ? evaluateReturn(tail.value, frame.scope, false) : undefined)
+    return { environment: frame.scope, returned, diagnostics }
   } catch (error) {
-    if (error !== abort) throw error
-    return { diagnostics }
+    if (!(error instanceof EvaluationError)) throw error
+    return { diagnostics: [...diagnostics, ...error.diagnostics] }
   }
 }

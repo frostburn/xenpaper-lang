@@ -1,62 +1,42 @@
 import { kCombinations } from 'xen-dev-utils'
 import type { CoercionAnnotation, Expression } from '../parser.js'
-import { Value } from '../value.js'
+import { isPositiveRationalRatio, Value } from '../value.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { evaluateLiteral } from './literals.js'
 import { needsScorePlayback } from './score-fragments.js'
-import type { CallableValue, EvaluatedLiteral, LexicalEnvironment } from './types.js'
-import { callableArity, isCallableValue } from './types.js'
+import {
+  callableArity,
+  isCallableValue,
+  type CallableValue,
+  type ContainerValue,
+  type EvaluatedLiteral,
+  type LexicalEnvironment,
+  type SourceOrigin,
+} from './types.js'
 
 export type ExpressionEvaluator = (
   node: Expression,
   environment?: LexicalEnvironment,
 ) => ExpressionEvaluationResult
-
-type EvaluateCallback = (
-  callback: CallableValue,
+type CallbackEvaluator = (
+  callable: CallableValue,
   args: readonly EvaluatedLiteral[],
 ) => ExpressionEvaluationResult
-type InvokeCallback = (
-  callback: CallableValue,
-  args: readonly EvaluatedLiteral[],
-) => EvaluatedLiteral | undefined
+type Coercion = CoercionAnnotation | 'container' | 'integer' | 'pitch' | 'ratio' | null | undefined
 
-function acceptsArguments(
-  callback: EvaluatedLiteral | undefined,
-  count: number,
-): callback is CallableValue {
-  if (!isCallableValue(callback)) return false
-  const [minimum, maximum] = callableArity(callback)
-  return count >= minimum && count <= maximum
-}
-
-type BuiltinCoercion = 'ratio' | 'pitch' | 'integer' | 'container' | undefined
-
-type Coercion = BuiltinCoercion | CoercionAnnotation | null
-
-const coercionName = (coercion: Coercion): string | undefined =>
-  typeof coercion === 'string' ? coercion : coercion?.name
-
-const elementCoercion = (coercion: Coercion): Coercion =>
-  coercion && typeof coercion === 'object' && coercion.name === 'container' && coercion.element
-    ? coercion.element
-    : coercion
-
-function ratioArgument(value: EvaluatedLiteral): EvaluatedLiteral {
-  if (value.kind === 'container') return { ...value, values: value.values.map(ratioArgument) }
-  if (value.kind === 'pitchOffset')
-    return { kind: 'scalar', value: Value.ratio(value.value), origins: value.origins }
-  return value
-}
-
-export function requireInteger(value: EvaluatedLiteral, name: string): number {
-  if (value.kind !== 'scalar') throw new TypeError(`${name} must be an integer.`)
-  const exact = value.value.exactRational()
+export function requireInteger(item: EvaluatedLiteral, name: string): number {
+  const exact = item.kind === 'scalar' && item.value.exactRational()
   if (!exact || exact.d !== 1) throw new TypeError(`${name} must be an integer.`)
-  return Number(exact.s * exact.n)
+  return exact.s * exact.n
 }
 
-/** Evaluate an argument using Xenpaper's container syntax and parameter coercion rules. */
+function container(
+  values: readonly EvaluatedLiteral[],
+  origins: readonly SourceOrigin[] = [],
+): ContainerValue {
+  return { kind: 'container', values, origins, value: new Value(0) }
+}
+
 export function evaluateBuiltinArgument(
   node: Expression,
   coercion: Coercion,
@@ -64,371 +44,212 @@ export function evaluateBuiltinArgument(
   evaluate: ExpressionEvaluator,
 ): ExpressionEvaluationResult {
   if (needsScorePlayback(node)) return evaluate(node, environment)
+  const name = typeof coercion === 'string' ? coercion : coercion?.name
   if (
     node.type === 'DegreeLiteral' &&
     !node.explicit &&
-    (coercionName(coercion) === 'ratio' ||
-      coercionName(coercion) === 'integer' ||
-      coercionName(coercion) === 'boolean')
-  )
+    (name === 'integer' || name === 'ratio' || name === 'boolean')
+  ) {
     return evaluateLiteral({
       type: 'IntegerLiteral',
-      value: node.degree,
       raw: node.raw,
+      value: node.degree,
       location: node.location,
     })
+  }
   if (node.type === 'Group') {
-    const evaluated = evaluateBuiltinArgument(node.expression, coercion, environment, evaluate)
-    if (!('value' in evaluated) || evaluated.value.kind !== 'container') return evaluated
-    return { ...evaluated, value: { ...evaluated.value, grouped: true } }
+    const item = evaluateBuiltinArgument(node.expression, coercion, environment, evaluate)
+    return 'value' in item && item.value.kind === 'container'
+      ? { ...item, value: { ...item.value, grouped: true } }
+      : item
   }
   if (node.type === 'PostfixExpression') {
-    const evaluated = evaluateBuiltinArgument(node.expression, coercion, environment, evaluate)
-    if (!('value' in evaluated)) return evaluated
-    return {
-      value: {
-        kind: 'container',
-        values: [evaluated.value],
-        postfixMarks: node.marks,
-        value: new Value(0),
-        origins: [{ location: node.location, role: 'literal' }],
-      },
-      diagnostics: evaluated.diagnostics,
-    }
-  }
-  if (node.type === 'NormalizeToSlot') {
-    if (!node.expression)
-      return {
-        value: {
-          kind: 'container',
-          values: [],
-          normalized: true,
-          value: new Value(0),
-          origins: [],
-        },
-        diagnostics: [],
-      }
-    if (node.expression.type === 'Sequence' || node.expression.type === 'Parallel') {
-      const evaluated = evaluateBuiltinArgument(node.expression, coercion, environment, evaluate)
-      if (!('value' in evaluated) || evaluated.value.kind !== 'container') return evaluated
-      return { ...evaluated, value: { ...evaluated.value, normalized: true } }
-    }
-    const item = evaluateBuiltinArgument(
-      node.expression,
-      elementCoercion(coercion),
-      environment,
-      evaluate,
-    )
+    const item = evaluateBuiltinArgument(node.expression, coercion, environment, evaluate)
     if (!('value' in item)) return item
     return {
+      ...item,
       value: {
-        kind: 'container',
-        values: [item.value],
-        normalized: true,
-        value: new Value(0),
-        origins: [{ location: node.location, role: 'literal' }],
+        ...container([item.value], [{ role: 'literal', location: node.location }]),
+        postfixMarks: node.marks,
       },
-      diagnostics: item.diagnostics,
     }
   }
-  if (node.type === 'Sequence' || node.type === 'Parallel') {
-    const nodes = node.type === 'Sequence' ? node.items : node.branches
-    const element = elementCoercion(coercion)
-    const results = nodes.map((item) =>
-      evaluateBuiltinArgument(item, element, environment, evaluate),
-    )
-    const diagnostics = results.flatMap((item) => item.diagnostics)
-    if (!results.every((item) => 'value' in item)) return { diagnostics }
-    return {
-      value: {
-        kind: 'container',
-        values: results.map((item) => (item as { value: EvaluatedLiteral }).value),
-        composition: node.type === 'Parallel' ? 'parallel' : 'sequence',
-        value: new Value(0),
-        origins: [{ location: node.location, role: 'literal' }],
-      },
-      diagnostics,
-    }
-  }
-  const evaluated = evaluate(node, environment)
-  if (coercionName(coercion) === 'ratio' && 'value' in evaluated)
-    return { ...evaluated, value: ratioArgument(evaluated.value) }
-  return evaluated
-}
-
-/** One callable built-in, including its signature, coercions, and implementation. */
-abstract class Builtin {
-  protected constructor(
-    readonly name: string,
-    private readonly minimumArguments: number,
-    private readonly maximumArguments: number,
-    private readonly coercions: readonly BuiltinCoercion[],
-  ) {}
-
-  evaluate(
-    node: Extract<Expression, { type: 'CallExpression' }>,
-    environment: LexicalEnvironment,
-    evaluate: ExpressionEvaluator,
-    evaluateCallback: EvaluateCallback,
-  ): ExpressionEvaluationResult {
-    if (
-      node.arguments.length < this.minimumArguments ||
-      node.arguments.length > this.maximumArguments
-    )
-      throw new TypeError(this.arityMessage(node.arguments.length))
-    const evaluated = node.arguments.map((argument, index) =>
-      evaluateBuiltinArgument(argument, this.coercions[index], environment, evaluate),
-    )
-    const diagnostics = evaluated.flatMap((argument) => argument.diagnostics)
-    if (!evaluated.every((argument) => 'value' in argument)) return { diagnostics }
-    const arguments_ = evaluated.map((argument) => (argument as { value: EvaluatedLiteral }).value)
-    const invokeCallback: InvokeCallback = (callback, args) => {
-      const result = evaluateCallback(callback, args)
-      diagnostics.push(...result.diagnostics)
-      return 'value' in result ? result.value : undefined
-    }
-    const value = this.call(arguments_, invokeCallback)
-    return value ? { value, diagnostics } : { diagnostics }
-  }
-
-  protected abstract call(
-    arguments_: readonly EvaluatedLiteral[],
-    invokeCallback: InvokeCallback,
-  ): EvaluatedLiteral | undefined
-
-  protected requireContainer(arguments_: readonly EvaluatedLiteral[], index = 0) {
-    const argument = arguments_[index]
-    if (!argument || argument.kind !== 'container')
-      throw new TypeError(`${this.name}() expects a container.`)
-    return argument.values
-  }
-
-  protected origins(arguments_: readonly EvaluatedLiteral[]) {
-    return arguments_.flatMap((argument) => argument.origins)
-  }
-
-  private arityMessage(received: number): string {
-    const expected =
-      this.minimumArguments === this.maximumArguments
-        ? `${this.minimumArguments} argument${this.minimumArguments === 1 ? '' : 's'}`
-        : `${this.minimumArguments} to ${this.maximumArguments} arguments`
-    return `${this.name}() expects ${expected}, but received ${received}.`
-  }
-}
-
-class PitchBuiltin extends Builtin {
-  constructor() {
-    super('pitch', 1, 1, ['ratio'])
-  }
-
-  protected call([value]: readonly EvaluatedLiteral[]): EvaluatedLiteral {
-    return this.convert(value!)
-  }
-
-  private convert(value: EvaluatedLiteral): EvaluatedLiteral {
-    if (value.kind === 'container')
-      return { ...value, values: value.values.map((item) => this.convert(item)) }
-    if (value.kind !== 'scalar') throw new TypeError('pitch() expects scalar ratios.')
-    return {
-      kind: 'pitchOffset',
-      value: Value.pitch(value.value),
-      origins: value.origins,
-      ...(value.value.isPositiveExactRatio() ? { justIntonation: true } : {}),
-    }
-  }
-}
-
-class RatioBuiltin extends Builtin {
-  constructor() {
-    super('ratio', 1, 1, ['pitch'])
-  }
-
-  protected call([value]: readonly EvaluatedLiteral[]): EvaluatedLiteral {
-    return this.convert(value!)
-  }
-
-  private convert(value: EvaluatedLiteral): EvaluatedLiteral {
-    if (value.kind === 'container')
-      return { ...value, values: value.values.map((item) => this.convert(item)) }
-    if (value.kind === 'scalar') return value
-    if (value.kind !== 'pitchOffset') throw new TypeError('ratio() expects pitch offsets.')
-    return { kind: 'scalar', value: Value.ratio(value.value), origins: value.origins }
-  }
-}
-
-class KCombinationsBuiltin extends Builtin {
-  constructor() {
-    super('kCombinations', 2, 2, ['container', 'integer'])
-  }
-
-  protected call(arguments_: readonly EvaluatedLiteral[]): EvaluatedLiteral {
-    const origins = this.origins(arguments_)
-    const count = requireInteger(arguments_[1]!, 'Combination size')
-    return {
-      kind: 'container',
-      values: kCombinations(this.requireContainer(arguments_), count).map((values) => ({
-        kind: 'container',
-        values,
-        value: new Value(0),
-        origins,
-      })),
-      value: new Value(0),
-      origins,
-    }
-  }
-}
-
-class ArrayReduceBuiltin extends Builtin {
-  constructor() {
-    super('arrayReduce', 2, 3, [undefined, 'container', undefined])
-  }
-
-  protected call(
-    arguments_: readonly EvaluatedLiteral[],
-    invokeCallback: InvokeCallback,
-  ): EvaluatedLiteral | undefined {
-    const callback = arguments_[0]
-    if (!acceptsArguments(callback, 2))
-      throw new TypeError('arrayReduce() expects a function that accepts two arguments.')
-    const items = this.requireContainer(arguments_, 1)
-    const initial = arguments_[2]
-    if (!items.length && !initial)
-      throw new TypeError(
-        'arrayReduce() cannot reduce an empty container without an initial value.',
-      )
-    let accumulator = initial ?? items[0]!
-    for (const item of initial ? items : items.slice(1)) {
-      const reduced = invokeCallback(callback, [accumulator, item])
-      if (!reduced) return undefined
-      accumulator = reduced
-    }
-    return accumulator
-  }
-}
-
-class ArrayMapBuiltin extends Builtin {
-  constructor() {
-    super('arrayMap', 2, 2, [undefined, 'container'])
-  }
-
-  protected call(
-    arguments_: readonly EvaluatedLiteral[],
-    invokeCallback: InvokeCallback,
-  ): EvaluatedLiteral | undefined {
-    const callback = arguments_[0]
-    if (!acceptsArguments(callback, 1))
-      throw new TypeError('arrayMap() expects a function that accepts one argument.')
-    const origins = this.origins(arguments_)
-    const values: EvaluatedLiteral[] = []
-    for (const item of this.requireContainer(arguments_, 1)) {
-      const mapped = invokeCallback(callback, [item])
-      if (!mapped) return undefined
-      values.push(mapped)
-    }
-    return {
-      ...arguments_[1],
-      kind: 'container',
-      values,
-      value: new Value(0),
-      origins,
-    }
-  }
-}
-
-class CompositionBuiltin extends Builtin {
-  constructor(
-    name: string,
-    private readonly composition: 'sequence' | 'parallel',
-  ) {
-    super(name, 1, 1, ['container'])
-  }
-
-  protected call(arguments_: readonly EvaluatedLiteral[]): EvaluatedLiteral {
-    return {
-      kind: 'container',
-      composition: this.composition,
-      values: this.requireContainer(arguments_),
-      value: new Value(0),
-      origins: this.origins(arguments_),
-    }
-  }
-}
-
-class FlatBuiltin extends Builtin {
-  constructor() {
-    super('flat', 1, 1, ['container'])
-  }
-
-  protected call(arguments_: readonly EvaluatedLiteral[]): EvaluatedLiteral {
-    const values = this.requireContainer(arguments_)
-    return {
-      ...arguments_[0],
-      kind: 'container',
-      values: values.flatMap((item) => (item.kind === 'container' ? item.values : [item])),
-      value: new Value(0),
-      origins: this.origins(arguments_),
-    }
-  }
-}
-
-class SortedBuiltin extends Builtin {
-  constructor(name = 'sorted') {
-    super(name, 1, 1, ['container'])
-  }
-
-  protected call(arguments_: readonly EvaluatedLiteral[]): EvaluatedLiteral {
-    const values = this.requireContainer(arguments_)
-    if (values.some((item) => item.kind !== 'scalar' && item.kind !== 'pitchOffset'))
-      throw new TypeError(`${this.name}() expects numeric values.`)
-    const numeric = values as readonly Extract<
-      EvaluatedLiteral,
-      { kind: 'scalar' | 'pitchOffset' }
-    >[]
-    return {
-      ...arguments_[0],
-      kind: 'container',
-      values: [...numeric].sort((a, b) =>
-        a.value.dimensions.equals(b.value.dimensions)
-          ? a.value.compare(b.value)
-          : a.value.valueOf() - b.value.valueOf(),
+  if (node.type !== 'Parallel' && node.type !== 'Sequence' && node.type !== 'NormalizeToSlot')
+    return evaluate(node, environment)
+  const contents = node.type === 'NormalizeToSlot' ? node.expression : node
+  const members =
+    contents?.type === 'Parallel'
+      ? contents.branches
+      : contents?.type === 'Sequence'
+        ? contents.items
+        : contents
+          ? [contents]
+          : []
+  const element = typeof coercion === 'object' && coercion?.element ? coercion.element : coercion
+  const children = members.map((member) =>
+    evaluateBuiltinArgument(member, element, environment, evaluate),
+  )
+  const diagnostics = children.flatMap((child) => child.diagnostics)
+  if (!children.every((child) => 'value' in child)) return { diagnostics }
+  const compound = contents?.type === 'Parallel' || contents?.type === 'Sequence'
+  const location = compound ? contents.location : node.location
+  return {
+    value: {
+      ...container(
+        children.map((child) => child.value),
+        contents ? [{ role: 'literal', location }] : [],
       ),
-      value: new Value(0),
-      origins: this.origins(arguments_),
-    }
+      ...(compound && { composition: contents.type === 'Parallel' ? 'parallel' : 'sequence' }),
+      ...(node.type === 'NormalizeToSlot' && { normalized: true }),
+    },
+    diagnostics,
   }
 }
 
-const BUILTINS = new Map(
-  [
-    new PitchBuiltin(),
-    new RatioBuiltin(),
-    new KCombinationsBuiltin(),
-    new ArrayReduceBuiltin(),
-    new ArrayMapBuiltin(),
-    new CompositionBuiltin('asSequence', 'sequence'),
-    new CompositionBuiltin('asParallel', 'parallel'),
-    new FlatBuiltin(),
-    new SortedBuiltin(),
-    new SortedBuiltin('sort'),
-  ].map((builtin) => [builtin.name, builtin]),
-)
+const signatures = {
+  pitch: ['ratio'],
+  ratio: ['pitch'],
+  flat: ['container'],
+  sorted: ['container'],
+  sort: ['container'],
+  asSequence: ['container'],
+  asParallel: ['container'],
+  kCombinations: ['container', 'integer'],
+  arrayMap: [null, 'container'],
+  arrayReduce: [null, 'container', null],
+} as const
+
+function convert(item: EvaluatedLiteral, target: 'pitch' | 'ratio'): EvaluatedLiteral {
+  if (item.kind === 'container')
+    return { ...item, values: item.values.map((v) => convert(v, target)) }
+  if (item.kind !== 'pitchOffset' && item.kind !== 'scalar')
+    throw new TypeError(
+      target === 'pitch' ? 'pitch() expects scalar ratios.' : 'ratio() expects pitch offsets.',
+    )
+  const { origins } = item
+  if (target === 'ratio')
+    return item.kind === 'scalar'
+      ? item
+      : { kind: 'scalar', value: Value.ratio(item.value), origins }
+  const value = item.kind === 'scalar' ? Value.pitch(item.value) : item.value
+  const justIntonation =
+    item.kind === 'scalar' ? isPositiveRationalRatio(item.value) : item.justIntonation
+  return { kind: 'pitchOffset', value, origins, ...(justIntonation && { justIntonation }) }
+}
 
 export function evaluateBuiltinCall(
   node: Extract<Expression, { type: 'CallExpression' }>,
   environment: LexicalEnvironment,
   evaluate: ExpressionEvaluator,
-  evaluateCallback: EvaluateCallback,
+  invoke: CallbackEvaluator,
 ): ExpressionEvaluationResult {
-  const builtin = BUILTINS.get(node.callee)
-  if (builtin) return builtin.evaluate(node, environment, evaluate, evaluateCallback)
-  return {
-    diagnostics: [
-      {
-        code: 'XP_UNDEFINED_NAME',
-        severity: 'error',
-        message: `Undefined function ${node.callee}().`,
-        locations: [node.location],
-      },
-    ],
+  if (!Object.hasOwn(signatures, node.callee))
+    return {
+      diagnostics: [
+        {
+          code: 'XP_UNDEFINED_NAME',
+          severity: 'error',
+          message: `Undefined function ${node.callee}().`,
+          locations: [node.location],
+        },
+      ],
+    }
+  const name = node.callee as keyof typeof signatures
+  const parameters = signatures[name]
+  const count = node.arguments.length
+  const min = name === 'arrayReduce' ? 2 : parameters.length
+  if (count < min || count > parameters.length) {
+    const expected = min === parameters.length ? String(min) : `${min} to ${parameters.length}`
+    throw new TypeError(
+      `${name}() expects ${expected} argument${parameters.length === 1 ? '' : 's'}, but received ${count}.`,
+    )
   }
+  const supplied = node.arguments.map((argument, index) =>
+    evaluateBuiltinArgument(argument, parameters[index], environment, evaluate),
+  )
+  const diagnostics = supplied.flatMap((argument) => argument.diagnostics)
+  if (!supplied.every((argument) => 'value' in argument)) return { diagnostics }
+  const args = supplied.map((argument) => argument.value)
+  if (name === 'pitch' || name === 'ratio') return { value: convert(args[0]!, name), diagnostics }
+  const higherOrder = name === 'arrayMap' || name === 'arrayReduce'
+  function collection(index: number) {
+    const input = args[index]!
+    if (input.kind !== 'container') throw new TypeError(`${name}() expects a container.`)
+    return input
+  }
+  if (higherOrder) {
+    const callback = args[0]!
+    const arity = name === 'arrayMap' ? 1 : 2
+    const accepted = isCallableValue(callback) && callableArity(callback)
+    if (!accepted || arity < accepted[0] || arity > accepted[1])
+      throw new TypeError(
+        `${name}() expects a function that accepts ${arity === 1 ? 'one argument' : 'two arguments'}.`,
+      )
+    const input = collection(1)
+    const mapped: EvaluatedLiteral[] = []
+    let accumulator = args[2]
+    for (const member of input.values) {
+      if (name === 'arrayReduce' && accumulator === undefined) {
+        accumulator = member
+        continue
+      }
+      const result = invoke(callback, name === 'arrayMap' ? [member] : [accumulator!, member])
+      diagnostics.push(...result.diagnostics)
+      if (!('value' in result)) return { diagnostics }
+      if (name === 'arrayMap') mapped.push(result.value)
+      else accumulator = result.value
+    }
+    if (name === 'arrayMap')
+      return {
+        value: { ...input, values: mapped, origins: [...callback.origins, ...input.origins] },
+        diagnostics,
+      }
+    if (accumulator) return { value: accumulator, diagnostics }
+    throw new TypeError('arrayReduce() cannot reduce an empty container without an initial value.')
+  }
+  const input = collection(0)
+  const { values } = input
+  let value: EvaluatedLiteral
+  switch (name) {
+    case 'asParallel':
+    case 'asSequence':
+      value = {
+        ...container(values, input.origins),
+        composition: name === 'asParallel' ? 'parallel' : 'sequence',
+      }
+      break
+    case 'flat':
+      value = {
+        ...input,
+        values: values.flatMap((item) => (item.kind === 'container' ? item.values : [item])),
+      }
+      break
+    case 'sort':
+    case 'sorted': {
+      const numeric = values.map((item) => {
+        if (item.kind !== 'pitchOffset' && item.kind !== 'scalar')
+          throw new TypeError(`${name}() expects numeric values.`)
+        return item
+      })
+      value = {
+        ...input,
+        values: numeric.sort((a, b) =>
+          a.value.dimensions.equals(b.value.dimensions)
+            ? a.value.compare(b.value)
+            : a.value.valueOf() - b.value.valueOf(),
+        ),
+      }
+      break
+    }
+    case 'kCombinations': {
+      const k = requireInteger(args[1]!, 'Combination size')
+      const origins = [...input.origins, ...args[1]!.origins]
+      value = container(
+        kCombinations([...values], k).map((items) => container(items, origins)),
+        origins,
+      )
+      break
+    }
+  }
+  return { value, diagnostics }
 }

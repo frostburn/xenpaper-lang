@@ -28,6 +28,7 @@ export function catchableDiagnostic(diagnostics: readonly Diagnostic[]): Diagnos
         code === 'XP_RECURSION' ||
         code === 'XP_LOOP_JUMP' ||
         code === 'XP_FUNCTION_STATEMENT' ||
+        code === 'XP_DUPLICATE_FUNCTION' ||
         code === 'XP_MISSING_RETURN' ||
         code === 'XP_RETURN_SCOPE',
     )

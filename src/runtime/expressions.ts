@@ -1,7 +1,7 @@
 import { parse, type Expression, type FunctionParameter } from '../parser.js'
 import { Fraction, mmod } from 'xen-dev-utils/fraction'
 import type { Diagnostic } from '../diagnostics.js'
-import { Value } from '../value.js'
+import { isPositiveRationalRatio, Value } from '../value.js'
 import { evaluateBuiltinArgument, evaluateBuiltinCall, requireInteger } from './builtins.js'
 import { evaluateLiteral, type NumericLiteralNode } from './literals.js'
 import {
@@ -15,6 +15,7 @@ import { equaveShift as modifierEquaveShift } from './pitch-modifiers.js'
 import type {
   EvaluatedLiteral,
   CallableValue,
+  FunctionDefinition,
   LexicalEnvironment,
   PitchOffsetValue,
   ScalarValue,
@@ -114,28 +115,48 @@ export function preludeEnvironment(): LexicalEnvironment {
   return environment
 }
 
+// Persistent environment frames advance after each declaration. The token
+// identifies the enclosing lexical scope across those snapshots.
+const declarationScopes = new WeakMap<LexicalEnvironment | FunctionDefinition, object>()
+
 export function evaluateDeclaration(
   node: Extract<Expression, { type: 'VariableDeclaration' | 'FunctionDeclaration' }>,
   mapping: PrimeMapping | PitchContext = DEFAULT_PITCH_CONTEXT,
-  environment: LexicalEnvironment = preludeEnvironment(),
+  environment?: LexicalEnvironment,
+  declarationScope = (environment && declarationScopes.get(environment)) ?? {},
 ): { readonly environment: LexicalEnvironment; readonly diagnostics: readonly Diagnostic[] } {
+  environment ??= preludeEnvironment()
   if (node.type === 'VariableDeclaration') {
     const evaluated = evaluateExpression(node.value, mapping, environment)
     if (!('value' in evaluated)) return { environment, diagnostics: evaluated.diagnostics }
-    return {
-      environment: extendLexicalEnvironment(environment, {
-        variables: new Map([
-          [
-            node.name.name,
-            annotateReference(evaluated.value, {
-              location: node.name.location,
-              role: 'structural',
-            }),
-          ],
-        ]),
-      }),
-      diagnostics: evaluated.diagnostics,
-    }
+    const next = extendLexicalEnvironment(environment, {
+      variables: new Map([
+        [
+          node.name.name,
+          annotateReference(evaluated.value, {
+            location: node.name.location,
+            role: 'structural',
+          }),
+        ],
+      ]),
+    })
+    declarationScopes.set(next, declarationScope)
+    return { environment: next, diagnostics: evaluated.diagnostics }
+  }
+  for (let frame: LexicalEnvironment | undefined = environment; frame; frame = frame.parent) {
+    const previous = frame.functions.get(node.name.name)
+    if (previous && declarationScopes.get(previous) === declarationScope)
+      return {
+        environment,
+        diagnostics: [
+          {
+            code: 'XP_DUPLICATE_FUNCTION',
+            severity: 'error',
+            message: `Function ${node.name.name} is already declared in this scope.`,
+            locations: [node.name.location, previous.declaration.name.location],
+          },
+        ],
+      }
   }
   const names = node.parameters.map((parameter) => parameter.name.name)
   const duplicate = names.find((name, index) => names.indexOf(name) !== index)
@@ -200,12 +221,12 @@ export function evaluateDeclaration(
     body: node.body,
     environment,
   }
-  return {
-    environment: extendLexicalEnvironment(environment, {
-      functions: new Map([[node.name.name, definition]]),
-    }),
-    diagnostics: [],
-  }
+  const next = extendLexicalEnvironment(environment, {
+    functions: new Map([[node.name.name, definition]]),
+  })
+  declarationScopes.set(definition, declarationScope)
+  declarationScopes.set(next, declarationScope)
+  return { environment: next, diagnostics: [] }
 }
 
 function isNumericLiteral(node: Expression): node is NumericLiteralNode {
@@ -246,7 +267,7 @@ function coerceParameter(
       if (value.kind === 'scalar' && value.value.isPositiveExactRatio())
         return {
           ...result('pitchOffset', Value.pitch(value.value), value.origins),
-          justIntonation: true,
+          ...(isPositiveRationalRatio(value.value) && { justIntonation: true }),
         }
       break
     case 'integer': {

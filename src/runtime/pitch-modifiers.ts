@@ -1,10 +1,17 @@
-const EQUAVE_SHIFTS: Readonly<Record<string, number>> = {
-  equaveUp: 1,
-  doubleEquaveUp: 2,
-  equaveDown: -1,
+/** Number of written equaves added by this modifier. Other modifiers alter the pitch within an equave. */
+export function equaveShift(kind: string): number {
+  switch (kind) {
+    case 'equaveUp':
+      return 1
+    case 'doubleEquaveUp':
+      return 2
+    case 'equaveDown':
+      return -1
+    default:
+      return 0
+  }
 }
 
-export const equaveShift = (kind: string): number => EQUAVE_SHIFTS[kind] ?? 0
-
-export const equaveShifts = (modifiers: readonly { readonly kind: string }[]): number =>
-  modifiers.reduce((sum, modifier) => sum + equaveShift(modifier.kind), 0)
+export function equaveShifts(modifiers: readonly { readonly kind: string }[]): number {
+  return modifiers.reduce((total, modifier) => total + equaveShift(modifier.kind), 0)
+}
