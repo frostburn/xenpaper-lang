@@ -1064,6 +1064,13 @@ ${tuning} 'tone ^tone 'step ^step 'difference ^difference`,
     expect(result).toMatchObject({ diagnostics: [{ code: 'XP_EXPANSION_LIMIT' }] })
   })
 
+  it('reports an uneven outer continuation when building a score shape', () => {
+    const result = evaluateProgramShape(parse('(C, D E) = F'))
+    expect(result).toEqual({
+      diagnostics: [expect.objectContaining({ code: 'XP_UNEVEN_PARALLEL_CONTINUATION' })],
+    })
+  })
+
   it('treats positive irrational scalar expressions as playable ratios', () => {
     const result = shape('sqrt(2)')
 

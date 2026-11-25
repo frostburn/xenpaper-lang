@@ -1,4 +1,5 @@
 import { Fraction } from 'xen-dev-utils/fraction'
+import type { Diagnostic } from '../diagnostics.js'
 import type { AttackShape, ContinueShape, ScoreShape, SourceOrigin } from './types.js'
 
 /** A written rhythmic slot and the sounding note it contributes can have different endpoints. */
@@ -18,8 +19,9 @@ interface SustainTarget {
   // A normalized slot stretches from its written start. A chord or tie stretches
   // from its earliest sounding note, which can follow rests in every branch.
   anchor?: Fraction
-  // A chord (or a tied bundle) takes the first following continuation as its unit.
+  // Ties and synthetic glissando continuations can infer the span from the next mark.
   span?: Fraction
+  unevenParallel?: boolean
 }
 
 export type Sound = Pick<AttackShape, 'pitch' | 'duration' | 'origins' | 'automation'>
@@ -43,6 +45,7 @@ export interface LayoutVisitor {
 export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
   const notes: PlacedNote[] = []
   const orphaned: ContinueShape[] = []
+  const diagnostics: Diagnostic[] = []
   function earliestOnset({ first, last }: SustainTarget): Fraction {
     let earliest = notes[first]!.start
     for (let i = first + 1; i < last; i++) {
@@ -52,7 +55,7 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
     return earliest
   }
   function sound(source: Sound, start: Fraction): PlacedNote {
-    const note = {
+    return {
       pitch: source.pitch,
       slotStart: start,
       start,
@@ -60,8 +63,6 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
       origins: source.origins,
       automation: source.automation,
     }
-    notes.push(note)
-    return note
   }
   function visit(node: ScoreShape, start: Fraction, active?: SustainTarget) {
     if (node.isolatedDirectiveScope) visitor?.enterScope()
@@ -78,6 +79,7 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
     switch (node.kind) {
       case 'attack': {
         const note = sound(node, start)
+        notes.push(note)
         visitor?.attack(node, note)
         return { first, last: notes.length, anchor: start, span: node.duration }
       }
@@ -88,6 +90,17 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
           orphaned.push(node)
           visitor?.orphan(node)
           return
+        }
+        // Glissando targets are lowered to continuations internally.
+        if (active.unevenParallel && node.extendsAutomation !== false) {
+          diagnostics.push({
+            code: 'XP_UNEVEN_PARALLEL_CONTINUATION',
+            severity: 'error',
+            message:
+              'Use branch-local continuations in a parallel with uneven attacks or releases.',
+            locations: node.origins.map((origin) => origin.location),
+          })
+          return active
         }
         const anchor = active.anchor ?? earliestOnset(active)
         const unit = active.span ?? node.duration
@@ -126,12 +139,21 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
           visitor?.leaveScope(start.add(node.duration))
         }
         if (first === notes.length) return undefined
-        return { first, last: notes.length }
+        const last = notes.length
+        if (node.normalized) return { first, last, anchor: start, span: node.duration }
+        const onset = notes[first]!.start
+        const release = start.add(node.duration)
+        for (let i = first; i < last; i++) {
+          const note = notes[i]!
+          if (!note.start.equals(onset) || !note.start.add(note.duration).equals(release))
+            return { first, last, unevenParallel: true }
+        }
+        return { first, last, anchor: onset, span: release.sub(onset) }
       default:
         visitor?.control(node, start, sound)
         return active
     }
   }
   visit(shape, new Fraction(0))
-  return { notes, orphaned }
+  return { notes, orphaned, diagnostics }
 }

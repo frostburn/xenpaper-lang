@@ -185,8 +185,8 @@ layout is resolved again; a cyclic or non-converging layout is diagnosed rather
 than assigned inconsistent note positions.
 
 The global timeline applies to expanded note positions, including repeats and
-notes moved by a continuation. For example, `(. 1d, D) =` places `1d` at beat
-2 relative to the clip. A global tuning change at that beat applies to the note.
+stretched slots. For example, the continuation in `[. 1d]=` places `1d` at beat 1
+relative to the clip. A global tuning change at that beat applies to the note.
 
 The lower-level literal, expression, pitch, FJS, directive, and notation helpers
 are exported for focused tooling and tests. There is not yet a single
@@ -510,14 +510,19 @@ Postfix `=` continues the active note after an ordinary sequence, including a
 parenthesized or stored phrase: `(1 2 3)==` has note durations 1, 1, and 3.
 A trailing rest clears the active note, so `(1 2 .)=` is an error. A normalized
 slot such as `[1 2 3]==` instead stretches the entire tuplet to three slots.
-Parallel expressions retain their all-note continuation rule; in uneven branches
-this can move later attacks and extend notes beyond the construction's duration.
-Place continuations inside each branch to control its ending independently.
+An outer `=` continues a chord whose notes start together and whose rhythmic
+spans reach the end of the parallel. In `(C, D)=`, both notes last two beats.
+Use branch-local continuations for uneven parallels. In `(C, D E=) F`, `E`
+starts at beat 1 and sustains until `F` starts at beat 3.
 
-`!` holds every attack to the construction's end. Marks apply in order:
-`(1 2 3)==!` retains starts 0, 1, and 2 and holds all notes to beat 5, while
+`!` holds every attack to the construction's end at its original onset.
+Attached `!=` extends that end by one slot. Marks apply in order.
 `[1 2 3]=!` first stretches the tuplet to two slots and then holds its notes
 to that end. Binary `->` ties matching pitches into the following operand.
+
+When arithmetic broadcasts a scalar over a score, the score supplies the
+rhythm, continuations, and articulation. The scalar supplies the pitch
+transformation.
 
 `fn name(parameters) { ... }` creates a lexical closure. The body can run `let`
 and `fn` declarations, assignments, and control blocks. `ret expression`

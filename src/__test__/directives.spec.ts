@@ -183,25 +183,31 @@ describe('directive runtime', () => {
   })
 
   it.each([
-    ['M2 + [@. P1 M2 P5]', ['1/3', '1/3', '1/3']],
+    ['M2 + [@. P1 M2 P5]', ['1/6', '1/6', '1/6']],
     ['(@. M2) + [P1 M2 P5]', ['1/3', '1/3', '1/3']],
     ['(@art(50%) M2) + [P1 M2 P5]', ['1/3', '1/3', '1/3']],
-    ['(@_ M2) + [P1 M2 P5]', ['11/30', '11/30', '11/30']],
-  ])('max-coalesces articulation while broadcasting: %s', (source, durations) => {
+    ['(@_ M2) + [P1 M2 P5]', ['1/3', '1/3', '1/3']],
+    ['[@. P1 M2 P5] + (@_ M2)', ['1/6', '1/6', '1/6']],
+    ['@. M2 + (P1, P5)', ['1/2', '1/2']],
+  ])('uses the constructed score articulation while broadcasting: %s', (source, durations) => {
     expect(notes(source).map((note) => note.duration.toFraction())).toEqual(durations)
   })
 
-  it('broadcasts a continued scalar using maximum note duration', () => {
-    const events = notes('(M2=) + [P1 M2 P5]')
-    const explicit = notes('M2 + ([P1 M2 P5]=)')
-    expect(events.map((note) => [note.start.toFraction(), note.duration.toFraction()])).toEqual(
-      explicit.map((note) => [note.start.toFraction(), note.duration.toFraction()]),
-    )
+  it.each([
+    ['(M2=) + [P1 M2 P5]', 'M2 + [P1 M2 P5]'],
+    ['[P1 M2 P5] + (M2 =)', '[P1 M2 P5] + M2'],
+    ['(M2==) + (P1, P5)', 'M2 + (P1, P5)'],
+  ])('uses the constructed score timing in %s', (source, reference) => {
+    const timing = (score: string) =>
+      notes(score).map((note) => [note.start.toFraction(), note.duration.toFraction()])
+    expect(timing(source)).toEqual(timing(reference))
   })
 
-  it('max-coalesces continuations on both sides of broadcasting', () => {
-    const events = notes('(M2=) + [P1= M2== P5]')
-    expect(events.map((note) => note.duration.toFraction())).toEqual(['2/3', '1', '1/3'])
+  it.each([
+    ['(M2=) + [P1= M2== P5]', ['1/3', '1/2', '1/6']],
+    ['([P1 M2 P5]=) + (M2==)', ['2/3', '2/3', '2/3']],
+  ])('retains continuations on the constructed score in %s', (source, durations) => {
+    expect(notes(source).map((note) => note.duration.toFraction())).toEqual(durations)
   })
 
   it('steals time for a grace cluster', () => {
@@ -449,6 +455,12 @@ describe('directive runtime', () => {
     expect(held[0]!.duration.valueOf()).toBe(3)
     const mismatch = compile('@gliss (F C)= [E, D]?')
     expect(mismatch.diagnostics).toContainEqual(expect.objectContaining({ code: 'XP_GLISS_SHAPE' }))
+  })
+
+  it('reports an uneven outer continuation on a glissando target', () => {
+    const result = compile('@gliss (C, D E) (F, G A)=')
+    expect(result.diagnostics).toMatchObject([{ code: 'XP_UNEVEN_PARALLEL_CONTINUATION' }])
+    expect('score' in result).toBe(false)
   })
 
   it('keeps the glide duration separate from a held target', () => {

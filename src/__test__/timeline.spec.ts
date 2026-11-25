@@ -193,40 +193,55 @@ for (value of [true]) { chosen <- value $ . }
     expect(result[0]!.pitch.value.equals(result[1]!.pitch.value)).toBe(false)
   })
 
-  it.each([
-    '(. 1d, D) =',
-    '(D, . 1d)=',
-    '(. 1d, D) @p $ =',
-    'let phrase <- (. 1d, D) $ phrase =',
-    'fn phrase() { ret (. 1d, D) } $ phrase()=',
-  ])('uses the global context at the expanded note in %s', (source) => {
-    const initialization = initialize('... {24edo}')
-    const result = notes(source, initialization, new Fraction(1))
-    const reference = notes('1d', initialization, new Fraction(3))[0]!
-    expect(result[1]?.start.toFraction()).toBe('2')
-    expect(result[1]?.pitch.value.equals(reference.pitch.value)).toBe(true)
-    expect(reference.pitch.value.valueOf()).toBe(50)
+  it('stretches leading rests and reads the global context in a normalized parallel slot', () => {
+    const result = notes('[. 1d, . 2d]=', initialize('. {24edo}'))
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['1', '1'])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual([50, 100])
   })
 
-  it('reads a reassigned global variable at the expanded beat of its attack', () => {
-    const initialization = initialize('let phrase <- C $ .. $ phrase <- E')
-    const result = notes('(. phrase, D) =', initialization)
-    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '2'])
+  it.each([
+    '(. 1d=, D)',
+    '(D, . 1d =)',
+    'let phrase <- (. 1d=, D) $ phrase',
+    'fn phrase() { ret (. 1d=, D) } $ phrase()',
+  ])(
+    'uses the global context at the authored attack with a branch-local continuation in %s',
+    (source) => {
+      const initialization = initialize('.. {24edo}')
+      const result = notes(source, initialization, new Fraction(1))
+      const reference = notes('1d', initialization, new Fraction(2))[0]!
+      expect(result[1]?.start.toFraction()).toBe('1')
+      expect(result[1]?.pitch.value.equals(reference.pitch.value)).toBe(true)
+      expect(reference.pitch.value.valueOf()).toBe(50)
+    },
+  )
+
+  it('rejects an outer continuation on uneven attacks with a global timeline', () => {
+    const initialization = initialize('.. {24edo}')
+    const result = expandToBeatEvents(parse('(. 1d, D) ='), { initialization })
+    expect(result.diagnostics).toMatchObject([{ code: 'XP_UNEVEN_PARALLEL_CONTINUATION' }])
+    expect('score' in result).toBe(false)
+  })
+
+  it('reads a reassigned global variable at the attack with a branch-local continuation', () => {
+    const initialization = initialize('let phrase <- C $ . $ phrase <- E')
+    const result = notes('(. phrase=, D)', initialization)
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1'])
     expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual(
       notes('D E', initialization).map(({ pitch }) => pitch.value.valueOf()),
     )
   })
 
   it('looks up the timeline separately for each expanded repeat occurrence', () => {
-    const initialization = initialize('@time(3/4) ..... {24edo}')
-    const result = notes('|: (. 1d, D)= :|', initialization)
+    const initialization = initialize('@time(3/4) .... {24edo}')
+    const result = notes('|: (. 1d=, D) :|', initialization)
     expect(
       result
         .filter(({ label }) => label === '1d')
         .map(({ start, pitch }) => [start.toFraction(), pitch.value.valueOf()]),
     ).toEqual([
-      ['2', 100],
-      ['5', 50],
+      ['1', 100],
+      ['4', 50],
     ])
   })
 

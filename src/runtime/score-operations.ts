@@ -1,4 +1,3 @@
-import { Fraction } from 'xen-dev-utils/fraction'
 import type { Diagnostic } from '../diagnostics.js'
 import type { Expression, Repeat } from '../parser.js'
 import { resolveDirective } from './directives.js'
@@ -9,12 +8,6 @@ import type { ExpansionPath, LexicalEnvironment, PitchContext } from './types.js
 
 export type ScoreExpression = Expression & {
   readonly expansionPath?: ExpansionPath
-  readonly broadcastArticulation?: Fraction
-}
-type BroadcastScalar = {
-  expression: Expression
-  articulation: Fraction
-  continuations: Extract<Expression, { type: 'PostfixExpression' }>['marks']
 }
 
 export function expandEnumeratedChord(
@@ -76,45 +69,34 @@ const structuralItems = new Set<Expression['type']>([
   'PitchContextChange',
 ])
 
-/** Unwrap a single pitch expression together with the performance context authored around it. */
+/** Unwrap the pitch expression from a scalar with local articulation or timing marks. */
 function broadcastScalar(
   node: ScoreExpression,
   context: PitchContext,
   environment?: LexicalEnvironment,
-): BroadcastScalar | undefined {
+): Expression | undefined {
   switch (node.type) {
     case 'BinaryExpression':
       if (node.operator === '->') return
       break
     case 'Group':
       return broadcastScalar(node.expression, context, environment)
-    case 'PostfixExpression': {
-      const scalar = broadcastScalar(node.expression, context, environment)
-      if (scalar)
-        return {
-          ...scalar,
-          continuations: [
-            ...scalar.continuations,
-            ...node.marks.filter((mark) => mark.type === 'DetachedContinue'),
-          ],
-        }
-      return
-    }
+    case 'PostfixExpression':
+      return broadcastScalar(node.expression, context, environment)
     case 'Sequence': {
-      let scalar: BroadcastScalar | undefined
-      let articulation: Fraction | undefined
+      let scalar: Expression | undefined
       for (const item of node.items) {
+        if (item.type === 'DetachedContinue' && scalar) continue
         if (item.type === 'Directive') {
           const { directive } = resolveDirective(item, context, environment)
           if (directive?.kind !== 'articulation') return
-          articulation = directive.ratio
         } else {
           if (scalar) return
           scalar = broadcastScalar(item, context, environment)
           if (!scalar) return
         }
       }
-      return scalar && { ...scalar, articulation: articulation ?? scalar.articulation }
+      return scalar
     }
     case 'NormalizeToSlot':
       if (node.expression) return
@@ -125,12 +107,7 @@ function broadcastScalar(
     case 'RepeatChain':
       return
   }
-  if (!structuralItems.has(node.type))
-    return {
-      expression: node,
-      articulation: node.broadcastArticulation ?? new Fraction(1),
-      continuations: [],
-    }
+  if (!structuralItems.has(node.type)) return node
 }
 
 type ScoreOperation = Extract<
@@ -297,24 +274,9 @@ export function broadcastScalarOperation(
     (node.operator === '*' && !isConstruction(lhs ? left : right) && isPlainChord(construction))
   )
     return left === node.left && right === node.right ? undefined : { ...node, left, right }
-  const mapped = mapScoreMembers(construction, (member) => ({
+  return mapScoreMembers(construction, (member) => ({
     ...node,
-    left: lhs ? scalar.expression : member,
-    right: lhs ? member : scalar.expression,
-    broadcastArticulation:
-      member.broadcastArticulation && member.broadcastArticulation.compare(scalar.articulation) > 0
-        ? member.broadcastArticulation
-        : scalar.articulation,
+    left: lhs ? scalar : member,
+    right: lhs ? member : scalar,
   }))
-  if (!scalar.continuations.length) return mapped
-  if (mapped.type === 'PostfixExpression') {
-    const existing = mapped.marks.filter((mark) => mark.type === 'DetachedContinue').length
-    return { ...mapped, marks: [...mapped.marks, ...scalar.continuations.slice(existing)] }
-  }
-  return {
-    type: 'PostfixExpression',
-    expression: mapped,
-    marks: scalar.continuations,
-    location: construction.location,
-  }
 }

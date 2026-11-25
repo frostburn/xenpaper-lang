@@ -442,18 +442,19 @@ describe('beat event expansion', () => {
     ['let phrase <- [1 2 3] $ phrase==', ['0', '1', '2'], ['1', '1', '1'], '3'],
     ['let phrase <- [1 2 3]== $ phrase', ['0', '1', '2'], ['1', '1', '1'], '3'],
     ['(1, 2, 3)==', ['0', '0', '0'], ['3', '3', '3'], '3'],
+    ['(C, D) = F', ['0', '0', '2'], ['2', '2', '1'], '3'],
+    ['(C=, D=)=', ['0', '0'], ['3', '3'], '3'],
     ['let phrase <- (1, 2, 3)== $ phrase', ['0', '0', '0'], ['3', '3', '3'], '3'],
-    ['(1, 2 3)=', ['0', '0', '2'], ['2', '2', '2'], '3'],
     ['(. C, . D) =', ['1', '1'], ['2', '2'], '3'],
-    ['(.. C, . D) =', ['1', '3'], ['2', '2'], '4'],
-    ['(. D, .. C) =', ['1', '3'], ['2', '2'], '4'],
-    ['[. C, . D] =', ['1/2', '1/2'], ['1', '1'], '2'],
+    ['[. C, . D] =', ['1', '1'], ['1', '1'], '2'],
+    ['[C, D E]= F', ['0', '0', '1', '2'], ['1', '1', '1', '1'], '3'],
     ['[. C . D] =', ['1/2', '3/2'], ['1/2', '1/2'], '2'],
     ['((. C) -> D) =', ['1', '3'], ['2', '2'], '4'],
     ['[0, 4 7]=!', ['0', '0', '1'], ['2', '2', '1'], '2'],
-    ['(0, 4 7)=!', ['0', '0', '2'], ['3', '3', '1'], '3'],
     ['[0, 4 7]==!', ['0', '0', '3/2'], ['3', '3', '3/2'], '3'],
-    ['(0, 4 7)==!', ['0', '0', '3'], ['4', '4', '1'], '4'],
+    ['(C==, D E=) F', ['0', '0', '1', '3'], ['3', '1', '2', '1'], '4'],
+    ['(C, D E)! F', ['0', '0', '1', '2'], ['2', '2', '1', '1'], '3'],
+    ['(C, D E)!= F', ['0', '0', '1', '3'], ['3', '3', '2', '1'], '4'],
     ['(1 2 3)==!', ['0', '1', '2'], ['5', '4', '3'], '5'],
     ['(1 2 3)!=', ['0', '1', '2'], ['4', '3', '2'], '4'],
     ['(1 2 3)=!=', ['0', '1', '2'], ['5', '4', '3'], '5'],
@@ -522,11 +523,28 @@ describe('beat event expansion', () => {
     expect('score' in result).toBe(false)
   })
 
-  it('distributes a continuation over every note of an uneven parallel', () => {
-    const result = score('(C, D E) =')
-    const notes = result.events.filter((event) => event.kind === 'note')
-
-    expect(notes.map((note) => note.duration.valueOf())).toEqual([2, 2, 2])
+  it.each([
+    '(C, D E)= F',
+    '(C, D E) = F',
+    '(C D, E F)=',
+    '(.. C, . D) =',
+    '(C=, D)=',
+    '(C ., D .) =',
+    '(C, D E)=!',
+    '(C=, D)=!',
+    '(C, D E)! =',
+    '((C, D E) =) -> F',
+    'let phrase <- (C, D E) $ phrase =',
+    'fn phrase() { ret (C, D E) } $ phrase()=',
+  ])('requires branch-local continuations in %s', (source) => {
+    const result = expandToBeatEvents(parse(source))
+    expect(result.diagnostics).toMatchObject([
+      {
+        code: 'XP_UNEVEN_PARALLEL_CONTINUATION',
+        locations: [{ start: { offset: source.lastIndexOf('=') } }],
+      },
+    ])
+    expect('score' in result).toBe(false)
   })
 
   it('retains authored ratio labels for static renderers', () => {

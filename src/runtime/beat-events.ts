@@ -142,7 +142,7 @@ export function flattenScoreSemantics(
     for (const drone of scope.drones) drone.duration = end.sub(drone.start)
     scope.drones = []
   }
-  layoutNotes(shape, {
+  const layout = layoutNotes(shape, {
     enterScope() {
       scopes.push(scope)
       scope = { groove: scope.groove, drones: [] }
@@ -207,6 +207,7 @@ export function flattenScoreSemantics(
         events.push(marker(node, start))
     },
   })
+  diagnostics.push(...layout.diagnostics)
   release(shape.duration)
   return {
     score: {
