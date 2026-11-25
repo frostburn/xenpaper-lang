@@ -184,6 +184,10 @@ their scaled positions. If a context-dependent expression changes that rhythm,
 layout is resolved again; a cyclic or non-converging layout is diagnosed rather
 than assigned inconsistent note positions.
 
+The global timeline applies to expanded note positions, including repeats and
+notes moved by a continuation. For example, `(. 1d, D) =` places `1d` at beat
+2 relative to the clip. A global tuning change at that beat applies to the note.
+
 The lower-level literal, expression, pitch, FJS, directive, and notation helpers
 are exported for focused tooling and tests. There is not yet a single
 `compile(source)` convenience API; consumers must call `parse()` themselves.

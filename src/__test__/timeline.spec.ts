@@ -183,6 +183,43 @@ for (value of [true]) { chosen <- value $ . }
     expect(result[0]!.pitch.value.equals(result[1]!.pitch.value)).toBe(false)
   })
 
+  it.each([
+    '(. 1d, D) =',
+    '(D, . 1d)=',
+    '(. 1d, D) @p $ =',
+    'let phrase <- (. 1d, D) $ phrase =',
+    'fn phrase() { ret (. 1d, D) } $ phrase()=',
+  ])('uses the global context at the expanded note in %s', (source) => {
+    const initialization = initialize('... {24edo}')
+    const result = notes(source, initialization, new Fraction(1))
+    const reference = notes('1d', initialization, new Fraction(3))[0]!
+    expect(result[1]?.start.toFraction()).toBe('2')
+    expect(result[1]?.pitch.value.equals(reference.pitch.value)).toBe(true)
+    expect(reference.pitch.value.valueOf()).toBe(50)
+  })
+
+  it('looks up a global function at the expanded beat of its attack', () => {
+    const initialization = initialize('fn phrase() { ret C } .. fn phrase() { ret E }')
+    const result = notes('(. phrase(), D) =', initialization)
+    expect(result.map(({ label, start }) => [label, start.toFraction()])).toEqual([
+      ['D', '0'],
+      ['E', '2'],
+    ])
+  })
+
+  it('looks up the timeline separately for each expanded repeat occurrence', () => {
+    const initialization = initialize('@time(3/4) ..... {24edo}')
+    const result = notes('|: (. 1d, D)= :|', initialization)
+    expect(
+      result
+        .filter(({ label }) => label === '1d')
+        .map(({ start, pitch }) => [start.toFraction(), pitch.value.valueOf()]),
+    ).toEqual([
+      ['2', 100],
+      ['5', 50],
+    ])
+  })
+
   it('keeps ordinary group attacks on their original global context positions', () => {
     const initialization = initialize('. [. {5edo} .]')
     const result = notes('(D D D)==', initialization)

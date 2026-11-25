@@ -86,13 +86,13 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
         return
       }
       case 'BindingAssignment': {
-        const value = read(node.value, frame)
         const name = node.name.name
         for (let scope: LexicalEnvironment | undefined = frame.scope; scope; scope = scope.parent) {
           if (scope.functions.has(name)) break
           if (!scope.variables.has(name)) continue
           const names = bindings.get(scope)
           if (!names) break
+          const value = read(node.value, frame)
           journal?.push({ names, name, previous: names.get(name)! })
           names.set(name, value)
           return

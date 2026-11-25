@@ -1,7 +1,7 @@
 import { parse, type Expression, type FunctionParameter } from '../parser.js'
 import { Fraction, mmod } from 'xen-dev-utils/fraction'
 import type { Diagnostic } from '../diagnostics.js'
-import { Value } from '../value.js'
+import { isPositiveRationalRatio, Value } from '../value.js'
 import { evaluateBuiltinArgument, evaluateBuiltinCall, requireInteger } from './builtins.js'
 import { evaluateLiteral, type NumericLiteralNode } from './literals.js'
 import {
@@ -246,7 +246,7 @@ function coerceParameter(
       if (value.kind === 'scalar' && value.value.isPositiveExactRatio())
         return {
           ...result('pitchOffset', Value.pitch(value.value), value.origins),
-          justIntonation: true,
+          ...(isPositiveRationalRatio(value.value) && { justIntonation: true }),
         }
       break
     case 'integer': {

@@ -224,6 +224,10 @@ describe('score control flow', () => {
     ],
     ['fn choose() { try { ret missingName } catch { ret C } } $ choose()', 'C'],
     [
+      'fn runaway() { ret runaway() } $ fn choose() { try { missingTarget <- runaway() } catch { ret C } } $ choose()',
+      'C',
+    ],
+    [
       'fn choose(note) { try { note <- E $ ret (F . missingName) } catch { ret note . D } } $ choose(C)',
       'C . D',
     ],

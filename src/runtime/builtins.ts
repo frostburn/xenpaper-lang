@@ -1,6 +1,6 @@
 import { kCombinations } from 'xen-dev-utils'
 import type { CoercionAnnotation, Expression } from '../parser.js'
-import { Value } from '../value.js'
+import { isPositiveRationalRatio, Value } from '../value.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { evaluateLiteral } from './literals.js'
 import { needsScorePlayback } from './score-fragments.js'
@@ -132,12 +132,8 @@ function convert(item: EvaluatedLiteral, target: 'pitch' | 'ratio'): EvaluatedLi
       ? item
       : { kind: 'scalar', value: Value.ratio(item.value), origins }
   const value = item.kind === 'scalar' ? Value.pitch(item.value) : item.value
-  // A rational ratio has integer prime exponents, even beyond the range of Fraction.
-  const exponents = value.primeExponents()
   const justIntonation =
-    (item.kind === 'scalar' || item.justIntonation) &&
-    exponents !== undefined &&
-    [...exponents.values()].every((power) => power.d === 1)
+    item.kind === 'scalar' ? isPositiveRationalRatio(item.value) : item.justIntonation
   return { kind: 'pitchOffset', value, origins, ...(justIntonation && { justIntonation }) }
 }
 

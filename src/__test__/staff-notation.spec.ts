@@ -187,6 +187,11 @@ describe('staff notation construction', () => {
     expect(
       collect('{12edo} pitch(pitch(9/8)) pitch(2/1 ** -60)').map((note) => note.justIntonation),
     ).toEqual([true, true])
+    expect(
+      collect('{12edo} sqrt(2) pitch(sqrt(2)) 3/2 pitch(3/2) 2/1 ** -60 pitch(2/1 ** -60)').map(
+        (note) => note.justIntonation,
+      ),
+    ).toEqual([undefined, undefined, true, true, true, true])
   })
 
   it('retains shorthand articulation marks until a named articulation resets them', () => {

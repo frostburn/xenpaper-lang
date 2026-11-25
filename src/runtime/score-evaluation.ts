@@ -2,7 +2,7 @@ import { Fraction } from 'xen-dev-utils/fraction'
 import type { Expression, Node, Repeat } from '../parser.generated.js'
 import type { Diagnostic } from '../diagnostics.js'
 import { catchableDiagnostic, EvaluationError } from '../diagnostics.js'
-import { Value } from '../value.js'
+import { isPositiveRationalRatio, Value } from '../value.js'
 import {
   evaluateDeclaration,
   evaluateExpression,
@@ -23,6 +23,7 @@ import type { ExpressionEvaluationResult } from './expressions.js'
 import { DYNAMIC_VELOCITIES, resolveDirective } from './directives.js'
 import { Visitor, type VisitorEvaluation } from './visitor.js'
 import { contextAt } from './initialization.js'
+import { layoutNotes } from './note-layout.js'
 import { materializeScoreContinuations, tieScoreShapes } from './ties.js'
 import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment, isCallableValue } from './types.js'
 import {
@@ -89,6 +90,20 @@ function resolveContext(resolver: ContextResolver, base: ScoreVisitorContext): S
 
 type LoopFrame = { jump?: Extract<Expression, { type: 'LoopJump' }>['action'] }
 
+interface TimelineVisit {
+  readonly key: string
+  readonly offset: Fraction
+  readonly beat: Fraction
+  readonly children: Map<string, number>
+  readonly parent?: TimelineVisit
+}
+
+interface TimelinePass {
+  readonly beats: ReadonlyMap<string, Fraction>
+  readonly sources: Map<unknown, number>
+  readonly attacks: WeakMap<AttackShape['pitch'], TimelineVisit>
+}
+
 interface VisitorScope {
   readonly expansionPath: ExpansionPath
   readonly stopOnError?: boolean
@@ -96,6 +111,7 @@ interface VisitorScope {
   readonly offset: Fraction
   readonly timeScale: Fraction
   readonly layout?: boolean
+  readonly timelineVisit?: TimelineVisit
   readonly lockedPulse?: Fraction
   readonly base: ScoreVisitorContext
   readonly resolve: ContextResolver
@@ -1063,16 +1079,17 @@ function playablePitch(
       ],
     }
   }
+  const value = Value.pitch(ratio)
+  const justIntonation = isPositiveRationalRatio(ratio)
   return {
     pitch: {
       kind: 'pitchOffset',
-      value: Value.pitch(ratio).add(context.rootDisplacement),
-      notationValue: Value.pitch(ratio),
+      value: value.add(context.rootDisplacement),
+      notationValue: value,
       origins: evaluated.value.origins,
+      ...(justIntonation && { justIntonation: true }),
     },
-    ...(context.mapping.id !== 'untempered' && ratio.isPositiveExactRatio()
-      ? { justIntonation: true }
-      : {}),
+    ...(context.mapping.id !== 'untempered' && justIntonation ? { justIntonation: true } : {}),
     diagnostics: evaluated.diagnostics,
   }
 }
@@ -1082,6 +1099,61 @@ export function evaluateScoreSemantics(
   node: Expression,
   options: ScoreShapeOptions = {},
   playback = false,
+): ScoreShapeEvaluationResult {
+  const initialization = options.initialization
+  if (!initialization?.changes?.length) return evaluateScorePass(node, options, playback)
+
+  const offset = options.beatOffset ?? new Fraction(0)
+  const sources = new Map<unknown, number>()
+  let beats = new Map<string, Fraction>()
+  // Continuations and grace notes can move attacks after their operands are
+  // evaluated. Revisit affected expressions at the beats found by note layout.
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const attacks: TimelinePass['attacks'] = new WeakMap()
+    const result = evaluateScorePass(node, options, playback, { sources, beats, attacks })
+    if (!hasShape(result)) return result
+    const placements = new Map<TimelineVisit, Fraction>()
+    for (const note of layoutNotes(result.shape).notes) {
+      const visit = attacks.get(note.pitch)
+      if (!visit) continue
+      const beat = offset.add(note.start)
+      // A call or group that starts on this attack reads the same grid beat.
+      // An enclosing expression that starts earlier retains its own context.
+      for (
+        let owner: TimelineVisit | undefined = visit;
+        owner?.offset.equals(visit.offset);
+        owner = owner.parent
+      ) {
+        const previous = placements.get(owner)
+        if (!previous || beat.compare(previous) < 0) placements.set(owner, beat)
+      }
+    }
+    const next = new Map<string, Fraction>()
+    let changed = false
+    for (const [visit, beat] of placements) {
+      if (contextAt(initialization, beat) !== contextAt(initialization, visit.beat)) changed = true
+      if (!beat.equals(visit.offset)) next.set(visit.key, beat)
+    }
+    if (!changed) return result
+    beats = next
+  }
+  return {
+    diagnostics: [
+      {
+        code: 'XP_TIMELINE_LAYOUT',
+        severity: 'error',
+        message: 'Timed context changes do not produce stable expanded note positions.',
+        locations: [node.location],
+      },
+    ],
+  }
+}
+
+function evaluateScorePass(
+  node: Expression,
+  options: ScoreShapeOptions,
+  playback: boolean,
+  timeline?: TimelinePass,
 ): ScoreShapeEvaluationResult {
   const inherited = contextAt(options.initialization, options.beatOffset ?? new Fraction(0))
   options = {
@@ -1153,10 +1225,14 @@ export function evaluateScoreSemantics(
   }
   const visitorAfter = (result: ScoreShapeEvaluationResult, visitor: ScoreVisitor) => {
     const next = resultVisitors.get(result) ?? visitor
-    // A child's prevailing musical state can escape. Its repeat iteration ends at the child.
-    return next.scope.expansionPath === visitor.scope.expansionPath
+    // Musical state can escape the child, while its repeat and visit identities end there.
+    return next.scope.expansionPath === visitor.scope.expansionPath &&
+      next.scope.timelineVisit === visitor.scope.timelineVisit
       ? next
-      : next.spawn({ expansionPath: visitor.scope.expansionPath })
+      : next.spawn({
+          expansionPath: visitor.scope.expansionPath,
+          timelineVisit: visitor.scope.timelineVisit,
+        })
   }
 
   const visitorContext = (visitor: ScoreVisitor): ScoreVisitorContext => ({
@@ -1195,10 +1271,11 @@ export function evaluateScoreSemantics(
     visitor: ScoreVisitor,
     offset: Fraction,
     expansionPath = visitor.scope.expansionPath,
+    contextBeat = offset,
   ): ScoreVisitor => {
     let base = visitor.scope.layout
       ? visitor.scope.base
-      : (contextAt(options.initialization, offset) ?? visitor.scope.base)
+      : (contextAt(options.initialization, contextBeat) ?? visitor.scope.base)
     if (base === visitor.scope.base) return visitor.spawn({ offset, expansionPath })
     if (visitor.scope.lockedPulse && !base.pulse.equals(visitor.scope.lockedPulse))
       base = { ...base, pulse: visitor.scope.lockedPulse }
@@ -2607,25 +2684,23 @@ export function evaluateScoreSemantics(
       const elimination = current.marks.find((mark) => mark.type === 'TailElimination')
       let evaluated = visitor.visit(current.expression)
       if (!('shape' in evaluated) || visitor.scope.loop?.jump) return evaluated
-      // Only constructions continued as a unit need their timed contexts moved.
-      // Ordinary sequences keep their attack positions and continue the last note.
-      let continued = evaluated.shape
-      while (
-        continued.kind === 'sequence' &&
-        !continued.normalized &&
-        !continued.continuationTarget &&
-        continued.children.length === 1
-      )
-        continued = continued.children[0]!
-      if (
-        continuations.length &&
-        (continued.kind === 'parallel' ||
+      // When evaluating a global timeline, the shared layout determines the
+      // expanded note positions. Otherwise retain local barline evaluation.
+      if (!timeline && continuations.length && !visitor.scope.layout) {
+        let continued = evaluated.shape
+        while (
+          continued.kind === 'sequence' &&
+          !continued.normalized &&
+          !continued.continuationTarget &&
+          continued.children.length === 1
+        )
+          continued = continued.children[0]!
+        const stretch =
+          continued.kind === 'parallel' ||
           (continued.kind === 'sequence' &&
-            (continued.normalized || continued.continuationTarget === 'all'))) &&
-        !visitor.scope.layout
-      ) {
+            (continued.normalized || continued.continuationTarget === 'all'))
         const duration = evaluated.shape.duration.sub(currentPulse.mul(elimination?.count ?? 0))
-        if (duration.compare(0) > 0) {
+        if (stretch && duration.compare(0) > 0) {
           evaluated = visitor.visit(current.expression, {
             timeScale: visitor.scope.timeScale
               .mul(duration.add(currentPulse.mul(continuations.length)))
@@ -2784,6 +2859,8 @@ export function evaluateScoreSemantics(
         : {}),
     }
     if ('raw' in current) authoredLabels.set(shape, String(current.raw))
+    if (!visitor.scope.layout && visitor.scope.timelineVisit)
+      timeline?.attacks.set(shape.pitch, visitor.scope.timelineVisit)
     return { shape: withOccurrence(shape, visitor), diagnostics: evaluated.diagnostics }
   }
 
@@ -2803,13 +2880,33 @@ export function evaluateScoreSemantics(
     lexicalEnvironment: options.lexicalEnvironment,
   }
   const identity: ContextResolver = { cache: new WeakMap() }
+  const start = options.beatOffset ?? new Fraction(0)
+  const rootVisit: TimelineVisit = { key: '', offset: start, beat: start, children: new Map() }
   const visitor = new Visitor<ScoreExpression, VisitorScope, ScoreShapeEvaluationResult>(
     (current, active) => {
       try {
-        const result = evaluateNode(
-          current,
-          at(active, active.scope.offset, current.expansionPath ?? active.scope.expansionPath),
-        )
+        const occurrence = current.expansionPath ?? active.scope.expansionPath
+        let beat = active.scope.offset
+        if (timeline) {
+          const parent = active.scope.timelineVisit ?? rootVisit
+          const { source, start, end } = current.location
+          if (!timeline.sources.has(source)) timeline.sources.set(source, timeline.sources.size)
+          const id = `${timeline.sources.get(source)}:${start.offset}:${end.offset}:${current.type}`
+          const index = parent.children.get(id) ?? 0
+          parent.children.set(id, index + 1)
+          const key = `${parent.key}/${id}:${index}`
+          beat = timeline.beats.get(key) ?? beat
+          active = active.spawn({
+            timelineVisit: {
+              key,
+              offset: active.scope.offset,
+              beat,
+              children: new Map(),
+              parent: active.scope.timelineVisit,
+            },
+          })
+        }
+        const result = evaluateNode(current, at(active, active.scope.offset, occurrence, beat))
         if (
           active.scope.stopOnError &&
           result.diagnostics.some(({ severity }) => severity === 'error')
@@ -2839,7 +2936,7 @@ export function evaluateScoreSemantics(
       resolve: identity,
       subdivisionContext: identity,
 
-      offset: options.beatOffset ?? new Fraction(0),
+      offset: start,
       timeScale: new Fraction(1),
     },
   )
