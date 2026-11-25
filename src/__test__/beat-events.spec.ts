@@ -542,7 +542,7 @@ describe('beat event expansion', () => {
       'let division <- division + 1 $ @subdivision(division) C',
       'D',
     ],
-    ['function declarations', '', 'fn phrase() { ret C D } phrase()', 'phrase()'],
+    ['scoped function declarations', '', '(fn phrase() { ret C D } phrase())', 'F'],
   ])('matches authored copies for %s', (_description, prefix, repeatedBody, suffix) => {
     const repeated = `${prefix} |: ${repeatedBody} :| ${suffix}`
     const authored = `${prefix} ${repeatedBody} ${repeatedBody} ${suffix}`

@@ -109,17 +109,27 @@ for (value of [true]) { chosen <- value $ . }
     ])
   })
 
-  it('evaluates the actual expression when a global function changes its score shape', () => {
-    const initialization = initialize('fn phrase() { ret C } . fn phrase() { ret D E }')
-    expect(
-      notes('phrase() phrase()', initialization).map(({ label, start }) => [
-        label,
-        start.toFraction(),
-      ]),
-    ).toEqual([
-      ['C', '0'],
-      ['D', '1'],
-      ['E', '2'],
+  it('evaluates the actual expression when a reassigned variable changes its score shape', () => {
+    const initialization = initialize('let phrase <- C $ . $ phrase <- (D E)')
+    const result = notes('phrase phrase', initialization)
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1', '2'])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual(
+      notes('C D E', initialization).map(({ pitch }) => pitch.value.valueOf()),
+    )
+  })
+
+  it('rejects redeclaring a function at another beat in one timeline', () => {
+    const source = 'fn phrase() { ret C } . fn phrase() { ret E }'
+    const result = evaluateInitialization(parse(source), { allowDuration: true })
+    expect(result.initialization).toBeUndefined()
+    expect(result.diagnostics).toMatchObject([
+      {
+        code: 'XP_DUPLICATE_FUNCTION',
+        locations: [
+          { start: { offset: source.lastIndexOf('phrase') } },
+          { start: { offset: source.indexOf('phrase') } },
+        ],
+      },
     ])
   })
 
@@ -198,13 +208,13 @@ for (value of [true]) { chosen <- value $ . }
     expect(reference.pitch.value.valueOf()).toBe(50)
   })
 
-  it('looks up a global function at the expanded beat of its attack', () => {
-    const initialization = initialize('fn phrase() { ret C } .. fn phrase() { ret E }')
-    const result = notes('(. phrase(), D) =', initialization)
-    expect(result.map(({ label, start }) => [label, start.toFraction()])).toEqual([
-      ['D', '0'],
-      ['E', '2'],
-    ])
+  it('reads a reassigned global variable at the expanded beat of its attack', () => {
+    const initialization = initialize('let phrase <- C $ .. $ phrase <- E')
+    const result = notes('(. phrase, D) =', initialization)
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '2'])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual(
+      notes('D E', initialization).map(({ pitch }) => pitch.value.valueOf()),
+    )
   })
 
   it('looks up the timeline separately for each expanded repeat occurrence', () => {
@@ -239,15 +249,15 @@ for (value of [true]) { chosen <- value $ . }
     )
   })
 
-  it('settles normalized timing when a global function changes its length', () => {
-    const global = initialize('fn phrase() { ret C } [. fn phrase() { ret D E } ..]')
-    const result = notes('[phrase() phrase()]', global)
+  it('settles normalized timing when a reassigned variable changes its length', () => {
+    const global = initialize('let phrase <- C $ [. $ phrase <- (D E) $ ..]')
+    const result = notes('[phrase phrase]', global)
     expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1/3', '2/3'])
   })
 
   it('diagnoses a normalized rhythm with no consistent placement of a global switch', () => {
-    const global = initialize('fn phrase() { ret C } [. fn phrase() { ret D E } .]')
-    const result = expandToBeatEvents(parse('[phrase() phrase()]'), { initialization: global })
+    const global = initialize('let phrase <- C $ [. $ phrase <- (D E) $ .]')
+    const result = expandToBeatEvents(parse('[phrase phrase]'), { initialization: global })
     expect(result).not.toHaveProperty('score')
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'XP_TIMELINE_LAYOUT' }),

@@ -22,7 +22,7 @@ export type ReturnEvaluator<R> = (
   scope: LexicalEnvironment,
   protectedReturn: boolean,
 ) => R
-type Frame = { scope: LexicalEnvironment }
+type Frame = { scope: LexicalEnvironment; declarationScope: object }
 type Transfer<R> =
   | { kind: 'return'; result: R }
   | { kind: 'jump'; jump: Extract<Expression, { type: 'LoopJump' }> }
@@ -58,7 +58,7 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
     const variables = new Map([[id.name, value]])
     const child = extendLexicalEnvironment(scope, { variables })
     bindings.set(child, variables)
-    return { scope: child }
+    return { scope: child, declarationScope: {} }
   }
   function block(nodes: readonly Expression[], frame: Frame): Transfer<R> | undefined {
     for (const node of nodes) {
@@ -73,7 +73,7 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
         return block(node.items, frame)
       case 'FunctionDeclaration':
       case 'VariableDeclaration': {
-        const declared = evaluateDeclaration(node, mapping, frame.scope)
+        const declared = evaluateDeclaration(node, mapping, frame.scope, frame.declarationScope)
         if (declared.diagnostics.some((d) => d.severity === 'error'))
           throw new EvaluationError(declared.diagnostics)
         diagnostics.push(...declared.diagnostics)
@@ -115,7 +115,7 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
         throw new EvaluationError(evaluateThrow(node, mapping, frame.scope))
       case 'IfBlock': {
         const branch = isTruthy(read(node.condition, frame)) ? node.consequent : node.alternate
-        if (branch) return execute(branch, { ...frame })
+        if (branch) return execute(branch, { ...frame, declarationScope: {} })
         return
       }
       case 'TryBlock': {
@@ -125,7 +125,7 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
         const warnings = diagnostics.length
         journal = writes
         try {
-          return block(node.body.items, { ...frame })
+          return block(node.body.items, { ...frame, declarationScope: {} })
         } catch (error) {
           if (!(error instanceof EvaluationError)) throw error
           const failure = catchableDiagnostic(error.diagnostics)
@@ -145,7 +145,7 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
                   { role: 'structural', location: node.name.location },
                 ]),
               )
-            : { ...frame }
+            : { ...frame, declarationScope: {} }
           return block(node.handler.items, handler)
         } finally {
           journal = enclosing
@@ -158,10 +158,11 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
         if (node.type === 'ForBlock' && iterable?.kind !== 'container')
           return fail(node.iterable, 'XP_NOT_ITERABLE', `for ${node.mode} requires a container.`)
         for (let i = 0; ; i++) {
-          let iteration = local
+          let iteration: Frame
           if (node.type === 'WhileBlock') {
             spend(node)
             if (!isTruthy(read(node.condition, local))) break
+            iteration = { ...local, declarationScope: {} }
           } else {
             if (iterable?.kind !== 'container' || i >= iterable.values.length) break
             spend(node)
@@ -176,10 +177,11 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
             iteration = bind(frame.scope, node.name, item)
           }
           const completion = block(node.body.items, iteration)
+          if (node.type === 'WhileBlock') local.scope = iteration.scope
           if (completion?.kind === 'return') return completion
           if (completion?.jump.action === 'break') return
         }
-        if (node.alternate) return block(node.alternate.items, { ...frame })
+        if (node.alternate) return block(node.alternate.items, { ...frame, declarationScope: {} })
         return
       }
       default:
@@ -190,7 +192,7 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
         )
     }
   }
-  const frame = { scope: environment }
+  const frame: Frame = { scope: environment, declarationScope: {} }
   try {
     // The top-level trailing ret is the call's result operand. Earlier returns
     // and loop condition checks count as executed statements.

@@ -105,6 +105,7 @@ interface TimelinePass {
 }
 
 interface VisitorScope {
+  readonly declarationScope: object
   readonly expansionPath: ExpansionPath
   readonly stopOnError?: boolean
   readonly loop?: LoopFrame
@@ -1341,6 +1342,7 @@ function evaluateScorePass(
     body: Extract<Expression, { type: 'Sequence' }>,
     visitor: ScoreVisitor,
     deferRepeats = visitor.scope.loop !== undefined || visitor.scope.stopOnError === true,
+    declarationScope = {},
   ): ScoreShapeEvaluationResult => {
     spendFlowBudget(body)
     let diagnostics: readonly Diagnostic[] = []
@@ -1355,7 +1357,10 @@ function evaluateScorePass(
       body = { ...body, items }
     }
 
-    const evaluated = visitor.visit(body, { subdivisionContext: visitor.scope.resolve })
+    const evaluated = visitor.visit(body, {
+      subdivisionContext: visitor.scope.resolve,
+      declarationScope,
+    })
     return withVisitor(
       { ...evaluated, diagnostics: [...diagnostics, ...evaluated.diagnostics] },
       visitorAfter(evaluated, visitor),
@@ -1855,6 +1860,7 @@ function evaluateScorePass(
           { type: 'Sequence', items: [current], location: current.location },
           visitor,
           false,
+          visitor.scope.declarationScope,
         )
       }
       const count = repeatCount(current)
@@ -2044,7 +2050,12 @@ function evaluateScorePass(
             item,
             activeVisitor.scope.context,
             activeVisitor.scope.environment,
+            activeVisitor.scope.declarationScope,
           )
+          if (declared.diagnostics.some(({ severity }) => severity === 'error')) {
+            results.push({ diagnostics: declared.diagnostics })
+            continue
+          }
           activeVisitor = changeVisitor(activeVisitor, (context) => ({
             ...context,
             lexicalEnvironment: extendLexicalEnvironment(
@@ -2549,6 +2560,7 @@ function evaluateScorePass(
         visitor.visit(branch, {
           loop: undefined,
           subdivisionContext: visitor.scope.resolve,
+          declarationScope: {},
         }),
       )
       const diagnostics = results.flatMap((result) => result.diagnostics)
@@ -2569,6 +2581,7 @@ function evaluateScorePass(
     if (current.type === 'Group') {
       const grouped = visitor.visit(current.expression, {
         subdivisionContext: visitor.scope.resolve,
+        declarationScope: {},
       })
       if (!('shape' in grouped)) return grouped
       return {
@@ -2588,7 +2601,11 @@ function evaluateScorePass(
           diagnostics: [],
         }
       }
-      const local = { loop: undefined, subdivisionContext: visitor.scope.resolve }
+      const local = {
+        loop: undefined,
+        subdivisionContext: visitor.scope.resolve,
+        declarationScope: {},
+      }
       let evaluated = visitor.visit(current.expression, { ...local, layout: true })
       if (!('shape' in evaluated)) return evaluated
       if (!evaluated.shape.duration.n) {
@@ -2932,6 +2949,7 @@ function evaluateScorePass(
     {
       ...contextScope(base),
       expansionPath: [],
+      declarationScope: {},
       base,
       resolve: identity,
       subdivisionContext: identity,
