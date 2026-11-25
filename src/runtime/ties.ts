@@ -13,48 +13,54 @@ function materialize(
   layout: ReturnType<typeof layoutNotes>,
   removed?: Set<PlacedNote>,
 ): ScoreShape {
-  let index = 0
+  let noteIndex = 0
+  let placementIndex = 0
   const orphaned = new Set(layout.orphaned)
-  function visit(node: ScoreShape): ScoreShape {
+  function place(node: ScoreShape, slotDuration: Fraction, delay: Fraction): ScoreShape {
+    if (!delay.n && node.duration.equals(slotDuration)) return node
+    const branch: ScoreShape = delay.n
+      ? {
+          kind: 'sequence',
+          duration: delay.add(node.duration),
+          origins: node.origins,
+          children: [rest(delay, node.origins), node],
+        }
+      : node
+    return { kind: 'parallel', duration: slotDuration, origins: node.origins, branches: [branch] }
+  }
+  function visit(node: ScoreShape, allocated: Fraction): ScoreShape {
+    const { start, end } = layout.placements[placementIndex++]!
+    const duration = end.sub(start)
+    // A continued normalized slot may stretch past its written allocation.
+    // Its children use the stretched grid while the wrapper keeps the outer cursor.
+    const scale = node.duration.n ? duration.div(node.duration) : new Fraction(1)
     switch (node.kind) {
-      case 'sequence':
-        return { ...node, children: node.children.map(visit) }
-      case 'parallel':
-        return { ...node, branches: node.branches.map(visit) }
+      case 'sequence': {
+        const children = node.children.map((child) => visit(child, child.duration.mul(scale)))
+        return place({ ...node, duration, children }, allocated, new Fraction(0))
+      }
+      case 'parallel': {
+        const branches = node.branches.map((branch) => visit(branch, branch.duration.mul(scale)))
+        return place({ ...node, duration, branches }, allocated, new Fraction(0))
+      }
       case 'continue':
-        return orphaned.has(node) ? node : rest(node.duration, node.origins)
+        return orphaned.has(node) ? { ...node, duration } : rest(duration, node.origins)
       case 'attack': {
-        const note = layout.notes[index++]!
-        if (removed?.has(note)) return rest(node.duration, node.origins)
+        const note = layout.notes[noteIndex++]!
+        if (removed?.has(note)) return rest(allocated, node.origins)
         const attack = {
           ...node,
           duration: note.duration,
           origins: note.origins,
           automation: note.automation,
         }
-        const delay = note.start.sub(note.slotStart)
-        if (!delay.n && node.duration.equals(note.duration) && note.origins === node.origins)
-          return attack
-        const branch: ScoreShape = delay.n
-          ? {
-              kind: 'sequence',
-              duration: delay.add(note.duration),
-              origins: node.origins,
-              children: [rest(delay, node.origins), attack],
-            }
-          : attack
-        return {
-          kind: 'parallel',
-          duration: node.duration,
-          origins: node.origins,
-          branches: [branch],
-        }
+        return place(attack, allocated, note.start.sub(start))
       }
       default:
-        return node
+        return duration.equals(node.duration) ? node : { ...node, duration }
     }
   }
-  return visit(shape)
+  return visit(shape, shape.duration)
 }
 
 export function materializeScoreContinuations(shape: ScoreShape): ScoreShape {
@@ -90,8 +96,10 @@ export function tieScoreShapes(
   }
   return {
     kind: 'sequence',
-    continuationTarget: 'all',
-    children: [materialize(left, sources), materialize(right, targets, removed)],
+    ...(removed.size && { continuationTarget: 'end' as const }),
+    children: removed.size
+      ? [materialize(left, sources), materialize(right, targets, removed)]
+      : [left, right],
     duration: left.duration.add(right.duration),
     origins,
   }

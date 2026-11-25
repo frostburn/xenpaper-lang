@@ -75,6 +75,34 @@ describe('beat event expansion', () => {
   })
 
   it.each([
+    ['4::6 modc 6::8', 'let lower <- 4::6 $ let higher <- 6::8 $ lower modc higher'],
+    ['4::6 rdc (2/1 * 6::8)', 'let lower <- 4::6 $ let higher <- 2/1 * 6::8 $ lower rdc higher'],
+    ['4::6 + 6::8', 'let lower <- 4::6 $ let higher <- 6::8 $ lower + higher'],
+  ])('uses elementwise arithmetic for %s', (written, bound) => {
+    const result = audibleResult(written, false)
+    expect(result.events).toHaveLength(3)
+    expect(result).toEqual(audibleResult(bound, false))
+  })
+
+  it('pairs a written normalized slot with a bound slot', () => {
+    const written = 'let factors <- [3/2 2/1] $ [1/1 5/4] * factors'
+    const bound = 'let factors <- [3/2 2/1] $ let base <- [1/1 5/4] $ base * factors'
+    const result = audibleResult(written)
+    expect(result).toEqual(audibleResult(bound))
+    expect(result.events).toHaveLength(2)
+  })
+
+  it.each(['false @and 1::10001', 'true @or 1::10001'])(
+    'short-circuits %s before expanding its score operands',
+    (logic) => {
+      const expression = `1/1 + (${logic})`
+      const result = audibleResult(expression)
+      expect(result.events).toHaveLength(1)
+      expect(result).toEqual(audibleResult(`let kept <- ${expression} $ kept`))
+    },
+  )
+
+  it.each([
     ['C al [D E]', 'C'],
     ['C al 1::10001', 'C'],
     ['4::6 al 1::10001', '4::6'],
@@ -456,7 +484,11 @@ describe('beat event expansion', () => {
     ['[. C, . D] =', ['1', '1'], ['1', '1'], '2'],
     ['[C, D E]= F', ['0', '0', '1', '2'], ['1', '1', '1', '1'], '3'],
     ['[. C . D] =', ['1/2', '3/2'], ['1/2', '1/2'], '2'],
-    ['((. C) -> D) =', ['1', '3'], ['2', '2'], '4'],
+    ['((. C) -> D) =', ['1', '2'], ['1', '2'], '4'],
+    ['C==?? D', ['0', '1'], ['1', '1'], '2'],
+    ['C!? D', ['0', '0'], ['0', '1'], '1'],
+    ['C==?=? D', ['0', '2'], ['2', '1'], '3'],
+    ['[C D]=? E', ['0', '1', '1'], ['1', '0', '1'], '2'],
     ['[0, 4 7]=!', ['0', '0', '1'], ['2', '2', '1'], '2'],
     ['[0, 4 7]==!', ['0', '0', '3/2'], ['3', '3', '3/2'], '3'],
     ['(C==, D E=) F', ['0', '0', '1', '3'], ['3', '1', '2', '1'], '4'],

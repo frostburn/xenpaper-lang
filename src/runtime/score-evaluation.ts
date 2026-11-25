@@ -105,6 +105,7 @@ interface TimelinePass {
   readonly beats: ReadonlyMap<string, Fraction>
   readonly sources: Map<unknown, number>
   readonly attacks: WeakMap<AttackShape['pitch'], TimelineVisit>
+  unresolvedPitch: boolean
 }
 
 interface VisitorScope {
@@ -343,7 +344,7 @@ function trimShape(shape: ScoreShape, cutoff: Fraction): ScoreShape {
     return {
       ...shape,
       duration,
-      branches: shape.branches.map((branch) => trimShape(branch, duration)),
+      branches: shape.branches.map((branch) => trimShape(branch, cutoff)),
     }
   if (shape.kind === 'sequence') {
     let remaining = duration
@@ -772,7 +773,8 @@ export function evaluateScoreSemantics(
   // evaluated. Revisit affected expressions at the beats found by note layout.
   for (let attempt = 0; attempt < 32; attempt++) {
     const attacks: TimelinePass['attacks'] = new WeakMap()
-    const result = evaluateScorePass(node, options, playback, { sources, beats, attacks })
+    const pass = { sources, beats, attacks, unresolvedPitch: false }
+    const result = evaluateScorePass(node, options, playback, pass)
     if (!hasShape(result)) return result
     const placements = new Map<TimelineVisit, Fraction>()
     const layout = layoutNotes(result.shape)
@@ -797,7 +799,8 @@ export function evaluateScoreSemantics(
       if (!beat.equals(visit.offset)) next.set(visit.key, beat)
     }
     if (!changed)
-      return layout.diagnostics.length
+      return layout.diagnostics.length ||
+        (pass.unresolvedPitch && result.diagnostics.some(({ severity }) => severity === 'error'))
         ? { diagnostics: [...result.diagnostics, ...layout.diagnostics] }
         : result
     beats = next
@@ -973,6 +976,45 @@ function evaluateScorePass(
       measure = { length: new Fraction(change.numerator * 4, change.denominator), origin }
     }
     return measure
+  }
+
+  const barlineMeters = new Map<
+    readonly SourceOrigin[],
+    { readonly signature: ScoreVisitorContext['timeSignature']; readonly local: boolean }
+  >()
+  const checkBarlines = (shape: ScoreShape, offset: Fraction): Diagnostic[] => {
+    if (!barlineMeters.size) return []
+    const { placements } = layoutNotes(shape)
+    const meterOrigins = new Map<Fraction, Fraction>()
+    for (const placed of placements) {
+      if (placed.shape.kind !== 'time-signature') continue
+      const origin = placed.shape.visitorContextChange?.timeSignature?.origin
+      if (origin) meterOrigins.set(origin, offset.add(placed.start))
+    }
+    const diagnostics: Diagnostic[] = []
+    for (const placed of placements) {
+      if (placed.shape.kind !== 'barline') continue
+      const meter = barlineMeters.get(placed.shape.origins)
+      if (!meter) continue
+      const beat = offset.add(placed.start)
+      const signature = meter.local
+        ? meter.signature
+        : (contextAt(options.initialization, beat)?.timeSignature ?? meter.signature)
+      const measure = signature
+        ? {
+            length: new Fraction(signature.numerator * 4, signature.denominator),
+            origin: meterOrigins.get(signature.origin) ?? signature.origin,
+          }
+        : inheritedMeasureAt(beat)
+      if (measure && beat.sub(measure.origin).div(measure.length).d !== 1)
+        diagnostics.push({
+          code: 'XP_BARLINE_OFF_CYCLE',
+          severity: 'warning',
+          message: `Barline does not fall on a whole multiple of the ${measure.length.toFraction()}-beat measure.`,
+          locations: placed.shape.origins.map(({ location }) => location),
+        })
+    }
+    return diagnostics
   }
 
   const withVisitorContext = (shape: ScoreShape, visitor: ScoreVisitor): ScoreShape => ({
@@ -1379,7 +1421,10 @@ function evaluateScorePass(
       const right = next.visit(current.right)
       const diagnostics = [...left.diagnostics, ...right.diagnostics]
       if (!hasShape(right)) return { diagnostics }
-      if (visitor.scope.loop?.jump)
+      if (
+        visitor.scope.loop?.jump ||
+        (timeline && diagnostics.some(({ severity }) => severity === 'error'))
+      )
         return withVisitor(
           { shape: sequence([left.shape, right.shape], [origin(current)]), diagnostics },
           visitorAfter(right, next),
@@ -1498,33 +1543,11 @@ function evaluateScorePass(
       return { shape, diagnostics: [] }
     }
     if (current.type === 'Barline' || current.type === 'HardBoundary') {
-      const signature = visitor.scope.timeSignature
-      const measure = signature
-        ? {
-            length: new Fraction(signature.numerator * 4, signature.denominator),
-            origin: signature.origin,
-          }
-        : inheritedMeasureAt(visitor.scope.offset)
-      const offCycle =
-        !visitor.scope.layout &&
-        measure &&
-        visitor.scope.offset.sub(measure.origin).div(measure.length).d !== 1
-      return {
-        shape: withOccurrence(
-          barline(current, current.type === 'Barline' ? 'single' : 'double'),
-          visitor,
-        ),
-        diagnostics: offCycle
-          ? [
-              {
-                code: 'XP_BARLINE_OFF_CYCLE',
-                severity: 'warning',
-                message: `Barline does not fall on a whole multiple of the ${measure.length.toFraction()}-beat measure.`,
-                locations: [current.location],
-              },
-            ]
-          : [],
-      }
+      const shape = barline(current, current.type === 'Barline' ? 'single' : 'double')
+      const { timeSignature: signature, base } = visitor.scope
+      if (!visitor.scope.layout)
+        barlineMeters.set(shape.origins, { signature, local: signature !== base.timeSignature })
+      return { shape: withOccurrence(shape, visitor), diagnostics: [] }
     }
     if (current.type === 'Repeat') {
       if (playback) {
@@ -1904,6 +1927,9 @@ function evaluateScorePass(
             })
             resolved.diagnostics.push(...template.diagnostics)
             if ('shape' in template) {
+              resolved.diagnostics.push(
+                ...checkBarlines(template.shape, activeVisitor.scope.offset),
+              )
               if (attacks(template.shape).length < 2 || template.shape.duration.compare(0) <= 0) {
                 resolved.diagnostics.push({
                   code: 'XP_GROOVE',
@@ -1922,6 +1948,9 @@ function evaluateScorePass(
             })
             resolved.diagnostics.push(...template.diagnostics)
             if ('shape' in template) {
+              resolved.diagnostics.push(
+                ...checkBarlines(template.shape, activeVisitor.scope.offset),
+              )
               if (!attacks(template.shape).length) {
                 resolved.diagnostics.push({
                   code: 'XP_DRONE',
@@ -2356,101 +2385,61 @@ function evaluateScorePass(
       }
     }
     if (current.type === 'PostfixExpression') {
-      const holdIndex = current.marks.findIndex((mark) => mark.type === 'HoldUntilEnd')
-      if (holdIndex >= 0) {
-        const prefix = current.marks.slice(0, holdIndex)
-        const withoutHold = current.marks.filter((mark) => mark.type !== 'HoldUntilEnd')
-        const heldFrom = current.marks.slice(holdIndex)
-        const evaluated = visitor.visit(
-          prefix.length ? { ...current, marks: prefix } : current.expression,
-        )
-        if (!('shape' in evaluated) || visitor.scope.loop?.jump) return evaluated
-        const continuations = heldFrom.filter((mark) => mark.type === 'DetachedContinue')
-        const extension = currentPulse.mul(continuations.length)
-        const base = materializeScoreContinuations(evaluated.shape)
-        const held = holdAttacks(
-          base,
-          base.duration.add(extension),
-          extension,
-          current.marks.map((mark) => origin(mark, 'duration')),
-        )
-        if (held)
-          return withVisitor(
-            { shape: held, diagnostics: evaluated.diagnostics },
-            visitorAfter(evaluated, visitor),
-          )
-        return visitor.visit(
-          withoutHold.length ? { ...current, marks: withoutHold } : current.expression,
-        )
-      }
-      const continuations = current.marks.filter((mark) => mark.type === 'DetachedContinue')
-      const elimination = current.marks.find((mark) => mark.type === 'TailElimination')
-      let evaluated = visitor.visit(current.expression)
-      if (!('shape' in evaluated) || visitor.scope.loop?.jump) return evaluated
-      // When evaluating a global timeline, the shared layout determines the
-      // expanded note positions. Otherwise retain local barline evaluation.
-      if (!timeline && continuations.length && !visitor.scope.layout) {
-        let continued = evaluated.shape
-        while (
-          continued.kind === 'sequence' &&
-          !continued.normalized &&
-          !continued.continuationTarget &&
-          continued.children.length === 1
-        )
-          continued = continued.children[0]!
-        const stretch =
-          (continued.kind === 'parallel' && continued.normalized) ||
-          (continued.kind === 'sequence' &&
-            (continued.normalized || continued.continuationTarget === 'all'))
-        const duration = evaluated.shape.duration.sub(currentPulse.mul(elimination?.count ?? 0))
-        if (stretch && duration.compare(0) > 0) {
-          evaluated = visitor.visit(current.expression, {
-            timeScale: visitor.scope.timeScale
-              .mul(duration.add(currentPulse.mul(continuations.length)))
-              .div(duration),
-          })
-          if (!('shape' in evaluated) || visitor.scope.loop?.jump) return evaluated
+      const evaluated = visitor.visit(current.expression)
+      if (!hasShape(evaluated) || visitor.scope.loop?.jump) return evaluated
+      let { shape } = evaluated
+      for (let index = 0; index < current.marks.length; index++) {
+        const mark = current.marks[index]!
+        if (mark.type === 'TailElimination') {
+          const removed = currentPulse.mul(mark.count)
+          if (removed.compare(shape.duration) > 0)
+            return {
+              diagnostics: [
+                ...evaluated.diagnostics,
+                {
+                  code: 'XP_TAIL_ELIMINATION',
+                  severity: 'error',
+                  message: 'Tail elimination exceeds the score item duration.',
+                  locations: [mark.location],
+                },
+              ],
+            }
+          shape = trimShape(materializeScoreContinuations(shape), shape.duration.sub(removed))
+          if (shape.kind === 'sequence' && !shape.normalized)
+            shape = { ...shape, continuationTarget: 'end' }
+          continue
         }
-      }
-      let base = evaluated.shape
-      if (elimination) {
-        const removed = currentPulse.mul(elimination.count)
-        if (removed.compare(base.duration) > 0)
-          return {
-            diagnostics: [
-              ...evaluated.diagnostics,
-              {
-                code: 'XP_TAIL_ELIMINATION',
-                severity: 'error',
-                message: 'Tail elimination exceeds the score item duration.',
-                locations: [elimination.location],
-              },
-            ],
-          }
-        base = trimShape(base, base.duration.sub(removed))
-      }
-      if (!continuations.length)
-        return withVisitor(
-          { shape: base, diagnostics: evaluated.diagnostics },
-          visitorAfter(evaluated, visitor),
-        )
-      return withVisitor(
-        {
-          shape: sequence(
+        const first = mark.type === 'HoldUntilEnd' ? index + 1 : index
+        let end = first
+        while (current.marks[end]?.type === 'DetachedContinue') end++
+        const continuations = current.marks.slice(first, end)
+        if (mark.type === 'HoldUntilEnd') {
+          const extension = currentPulse.mul(continuations.length)
+          const base = materializeScoreContinuations(shape)
+          const held = holdAttacks(
+            base,
+            base.duration.add(extension),
+            extension,
+            [mark, ...continuations].map((part) => origin(part, 'duration')),
+          )
+          if (!held) continue
+          shape = held
+        } else {
+          shape = sequence(
             [
-              base,
-              ...continuations.map<ContinueShape>((mark) => ({
+              shape,
+              ...continuations.map<ContinueShape>((part) => ({
                 kind: 'continue',
                 duration: currentPulse,
-                origins: [origin(mark, 'duration')],
+                origins: [origin(part, 'duration')],
               })),
             ],
             [origin(current)],
-          ),
-          diagnostics: evaluated.diagnostics,
-        },
-        visitorAfter(evaluated, visitor),
-      )
+          )
+        }
+        index = end - 1
+      }
+      return withVisitor({ ...evaluated, shape }, visitorAfter(evaluated, visitor))
     }
 
     if (current.type === 'PitchContextChange') {
@@ -2551,12 +2540,26 @@ function evaluateScorePass(
       } else if (!('value' in attack)) value = attack
     }
     const evaluated = playablePitch(current, context, value)
-    if (!('pitch' in evaluated)) return evaluated
+    let pitch: AttackShape['pitch']
+    if ('pitch' in evaluated) pitch = evaluated.pitch
+    else {
+      // An atom can occupy a slot before the tuning at its final beat is known.
+      // Keep its duration for layout and require its real pitch at convergence.
+      if (
+        !timeline ||
+        !visitor.scope.normalizationBase ||
+        (visitor.scope.stopOnError && !visitor.scope.layout) ||
+        !evaluated.diagnostics.every(({ code }) => code === 'XP_TYPE_MISMATCH')
+      )
+        return evaluated
+      if (!visitor.scope.layout) timeline.unresolvedPitch = true
+      pitch = { ...context.rootPitch, value: context.rootDisplacement, origins: [origin(current)] }
+    }
     const shape: PlaybackAttackShape = {
       kind: 'attack',
-      pitch: evaluated.pitch,
+      pitch,
       duration: currentPulse,
-      origins: evaluated.pitch.origins,
+      origins: pitch.origins,
       rootPitch: context.rootPitch,
       dynamic: currentDynamic,
       velocity: DYNAMIC_VELOCITIES[currentDynamic],
@@ -2564,7 +2567,7 @@ function evaluateScorePass(
       directiveState: { ...currentDirectiveState },
       ...(currentArticulationMarks.length ? { articulationMarks: currentArticulationMarks } : {}),
       ...('raw' in current ? { authoredLabel: String(current.raw) } : {}),
-      ...(evaluated.justIntonation ? { justIntonation: true } : {}),
+      ...('pitch' in evaluated && evaluated.justIntonation ? { justIntonation: true } : {}),
       ...(current.type === 'DegreeLiteral' ||
       current.type === 'EqualDivisionLiteral' ||
       (current.type === 'QuantityLiteral' &&
@@ -2575,7 +2578,10 @@ function evaluateScorePass(
     if ('raw' in current) authoredLabels.set(shape, String(current.raw))
     if (!visitor.scope.layout && visitor.scope.timelineVisit)
       timeline?.attacks.set(shape.pitch, visitor.scope.timelineVisit)
-    return { shape: withOccurrence(shape, visitor), diagnostics: evaluated.diagnostics }
+    return {
+      shape: withOccurrence(shape, visitor),
+      diagnostics: visitor.scope.layout && !('pitch' in evaluated) ? [] : evaluated.diagnostics,
+    }
   }
 
   const base: ScoreVisitorContext = {
@@ -2660,6 +2666,7 @@ function evaluateScorePass(
   const prevailing = visitorContext(visitorAfter(result, visitor))
   return {
     ...result,
+    diagnostics: [...result.diagnostics, ...checkBarlines(result.shape, start)],
     pitchContext: prevailing.pitchContext,
     directiveState: prevailing.directiveState,
     lexicalEnvironment: prevailing.lexicalEnvironment,

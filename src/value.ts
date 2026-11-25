@@ -420,12 +420,25 @@ export class Value {
     return negative && remainder.compare(zero) ? divisor.sub(remainder) : remainder
   }
 
-  /** Geometrically reduce an exact ratio by another exact ratio. */
+  /** Geometrically reduce a ratio into the equave. */
   reduce(input: ValueInput): Value {
-    const left = this.exactRational()
-    const right = coerceValue(input).exactRational()
-    if (!left || !right) throw new TypeError('Geometric reduction requires exact rational values.')
-    return new Value(left.geoMod(right))
+    const equave = coerceValue(input)
+    if (!this.dimensions.isDimensionless || !equave.dimensions.isDimensionless)
+      throw new TypeError('Geometric reduction requires dimensionless ratios.')
+    if (
+      (this.magnitude.kind === 'real' && !Number.isFinite(this.magnitude.value)) ||
+      (equave.magnitude.kind === 'real' && !Number.isFinite(equave.magnitude.value))
+    )
+      throw new RangeError('Geometric reduction requires finite ratios.')
+    if (this.compare(0) <= 0 || equave.compare(1) <= 0) {
+      const left = this.exactRational()
+      const right = equave.exactRational()
+      if (left && right) return new Value(left.geoMod(right))
+      throw new RangeError(
+        'Geometric reduction requires a positive ratio and equave greater than one.',
+      )
+    }
+    return Value.ratio(Value.pitch(this).mmod(Value.pitch(equave)))
   }
 
   neg(): Value {

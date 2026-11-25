@@ -186,6 +186,35 @@ for (value of [true]) { chosen <- value $ . }
     expect(result[0]!.pitch.value.equals(result[1]!.pitch.value)).toBe(false)
   })
 
+  it.each([
+    ['[. MOS{5L2s} .]', '[C J]', '1/2'],
+    ['. MOS{5L2s}', '[C J]=', '1'],
+  ])('validates a normalized note in its final MOS context for %s', (timeline, source, beat) => {
+    const result = notes(source, initialize(timeline))
+    expect(result.map(({ label, start }) => [label, start.toFraction()])).toEqual([
+      ['C', '0'],
+      ['J', beat],
+    ])
+  })
+
+  it('reports pitch errors that remain at the final normalized beat', () => {
+    const result = expandToBeatEvents(parse('[C J]'), { initialization: initialize('. {24edo}') })
+    expect(result).not.toHaveProperty('score')
+    expect(result.diagnostics).toMatchObject([
+      { message: 'Diamond-MOS pitches require a MOS declaration.' },
+    ])
+  })
+
+  it('reports errors from later parent states of a duration-bearing initialization', () => {
+    const parent = initialize('let denom <- 1/1 $ . $ denom <- 0/1')
+    const result = evaluateInitialization(parse('let quotient <- 1 / denom $ .'), {
+      initialization: parent,
+      allowDuration: true,
+    })
+    expect(result.initialization).toBeUndefined()
+    expect(result.diagnostics).toMatchObject([{ code: 'XP_DIVISION_BY_ZERO' }])
+  })
+
   it('applies context at the stretched positions of a continued normalized slot', () => {
     const initialization = initialize('. {5edo}')
     const result = notes('[D D]=', initialization)

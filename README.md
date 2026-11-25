@@ -156,7 +156,8 @@ root frequency fixed.
 `evaluateInitialization()` compiles an enclosing zero-duration source, or a
 global timeline with `allowDuration: true`. Pass the returned `initialization`
 to another initialization or to score evaluation. A clip's `beatOffset` is an
-exact `Fraction`. Global context is selected at absolute grid positions.
+exact `Fraction`. Global context is selected at absolute grid positions. A
+child initialization reports errors encountered under a timed parent state.
 Local groups and function calls retain their scopes.
 
 ```ts
@@ -206,8 +207,9 @@ The built-in identifier `pi` evaluates to the dimensionless real constant π.
 
 For a positive modulus `m`, `mod` wraps to `[0, m)` and `modc` wraps to
 `(0, m]`. For positive ratios and an equave `e` greater than one, `rd` wraps
-to `[1, e)` and `rdc` wraps to `(1, e]`. All four operators apply elementwise
-to containers.
+to `[1, e)` and `rdc` wraps to `(1, e]`. Reduction preserves exactness when
+both operands are exact and also supports inexact ratios. All four operators
+apply elementwise to containers.
 
 Built-in calls use the same contextual coercions as annotated function
 parameters: a bare integer passed to `pitch()` is a scalar ratio, one passed to
@@ -326,7 +328,8 @@ Use `try { ... } catch(message) { ... }` to recover from an evaluation error.
 that message or omit the binding with `catch { ... }`. A failed `try`
 discards its emitted score and binding updates, including when evaluation
 of a `ret` operand fails. A successful `try` keeps them and skips the handler.
-Expansion limits, recursion, and invalid control flow still stop evaluation.
+Expansion limits, recursion, invalid control flow, and invalid continuations
+stop evaluation.
 
 ```text
 try {
@@ -341,9 +344,9 @@ Harmonic segments are iterable ratio containers in value expressions.
 `1/1`, `6/5`, `7/5`, and `8/5`. When played directly in a score, the
 segment remains a chord.
 
-Multiplying two harmonic chords with `*` pairs their notes in order and
+Arithmetic between two harmonic chord values pairs their notes in order and
 requires the same number of notes in each chord. This applies to written
-chords, bindings, and function results. To play every pair of harmonics,
+chords, bindings, and function results. To multiply every pair of harmonics,
 multiply each note of one chord by the whole second chord, flatten the result,
 and play the products in parallel.
 
@@ -398,6 +401,9 @@ notes, operand durations, and other attack positions stay intact. For example,
 the second line sustains C from pulse 0 to 4/3 and E from 2/3 to 2, while D
 and F retain their original subdivisions. Repeated matches on the right extend
 the source to the latest matching endpoint.
+
+After a tie with matches, `=` extends the notes that sound through the tie's
+end at their existing onsets. A tie with zero matches behaves like a sequence.
 
 Arithmetic and postfix marks bind tighter than `->`; sequencing and parallel
 composition bind more loosely. Parenthesize multi-note or chord operands.
@@ -514,15 +520,17 @@ function and composed with other scores.
 
 Postfix `=` continues the active note after an ordinary sequence, including a
 parenthesized or stored phrase: `(1 2 3)==` has note durations 1, 1, and 3.
-A trailing rest clears the active note, so `(1 2 .)=` is an error. A normalized
-slot such as `[1 2 3]==` instead stretches the entire tuplet to three slots.
+A trailing rest clears the active note, so `(1 2 .)=` is an error. A continuation
+after a normalized slot stretches the slot, including its barlines and
+directives. `[1 2 3]==` stretches the tuplet to three slots.
 An outer `=` continues a chord whose notes start together and whose rhythmic
 spans reach the end of the parallel. In `(C, D)=`, both notes last two beats.
 Use branch-local continuations for uneven parallels. In `(C, D E=) F`, `E`
 starts at beat 1 and sustains until `F` starts at beat 3.
 
 `!` holds every attack to the construction's end at its original onset.
-Attached `!=` extends that end by one slot. Marks apply in order.
+Attached `!=` extends that end by one slot. Marks apply left to right.
+Each `?` cuts one slot from the result of the preceding marks.
 `[1 2 3]=!` first stretches the tuplet to two slots and then holds its notes
 to that end. Binary `->` ties matching pitches into the following operand.
 
