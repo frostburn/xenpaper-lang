@@ -30,6 +30,13 @@ const audibleResult = (source: string, includeLabels = true) => {
 }
 
 describe('beat event expansion', () => {
+  it.each(['() (C,) D', 'let empty <- () $ let single <- (C,) $ empty single D'])(
+    'plays empty and singleton parallels in %s',
+    (source) => {
+      expect(audibleResult(source, false)).toEqual(audibleResult('C D', false))
+    },
+  )
+
   it.each([
     '4::6 * 6::8',
     'let lower <- 4::6 $ 6::8 * lower',

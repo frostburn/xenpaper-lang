@@ -49,6 +49,38 @@ describe('parser results for tools', () => {
   })
 })
 
+describe('parenthesized parallels', () => {
+  it('preserves empty and singleton branches', () => {
+    expect(parse('()').body).toMatchObject([{ type: 'Parallel', branches: [] }])
+    expect(parse('(C,)').body).toMatchObject([
+      { type: 'Parallel', branches: [{ type: 'PitchLiteral', raw: 'C' }] },
+    ])
+    expect(parse('(C D, # one branch\n)').body).toMatchObject([
+      { type: 'Parallel', branches: [{ type: 'Sequence', items: [{ raw: 'C' }, { raw: 'D' }] }] },
+    ])
+  })
+
+  it('retains grouping and distinguishes parallel values from argument lists', () => {
+    expect(parse('(C) (C, D)').body).toMatchObject([
+      {
+        type: 'Sequence',
+        items: [
+          { type: 'Group', expression: { type: 'PitchLiteral' } },
+          {
+            type: 'Group',
+            expression: { type: 'Parallel', branches: [{ raw: 'C' }, { raw: 'D' }] },
+          },
+        ],
+      },
+    ])
+    expect(parse('phrase()').body).toMatchObject([{ type: 'CallExpression', arguments: [] }])
+    expect(parse('phrase((C,))').body).toMatchObject([
+      { type: 'CallExpression', arguments: [{ type: 'Parallel', branches: [{ raw: 'C' }] }] },
+    ])
+    expect(parse('() => C').body).toMatchObject([{ type: 'LambdaExpression', parameters: [] }])
+  })
+})
+
 describe('lexical declarations', () => {
   it('preserves the score sequence and its binding boundaries', () => {
     const declarations = [

@@ -80,7 +80,7 @@ fn eulerGenus(guide: integer, root: integer <- 1/1, equave: ratio <- 2/1) {
   while(@not (guide mod equave)) {
     guide <- guide / equave
   }
-  let pitches <- [equave]
+  let pitches <- (equave,)
   for(harmonic of 1::guide) {
     if(@not (guide mod harmonic)) {
       let reduced <- (harmonic / root) rd equave
