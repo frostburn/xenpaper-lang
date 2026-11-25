@@ -16,7 +16,7 @@ export class EvaluationError extends Error {
   }
 }
 
-/** Structural control-flow failures must still terminate evaluation. */
+/** Structural control-flow and continuation failures must still terminate evaluation. */
 export function catchableDiagnostic(diagnostics: readonly Diagnostic[]): Diagnostic | undefined {
   const errors = diagnostics.filter(({ severity }) => severity === 'error')
   if (
@@ -25,6 +25,8 @@ export function catchableDiagnostic(diagnostics: readonly Diagnostic[]): Diagnos
         code === 'XP_EXPANSION_LIMIT' ||
         code === 'XP_REPEAT_EXPANSION_LIMIT' ||
         code === 'XP_REPEAT_COUNT' ||
+        code === 'XP_CONTINUE_WITHOUT_ATTACK' ||
+        code === 'XP_UNEVEN_PARALLEL_CONTINUATION' ||
         code === 'XP_RECURSION' ||
         code === 'XP_LOOP_JUMP' ||
         code === 'XP_FUNCTION_STATEMENT' ||

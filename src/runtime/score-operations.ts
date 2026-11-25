@@ -18,11 +18,7 @@ export function expandEnumeratedChord(
   const expand = (child: Expression) => expandEnumeratedChord(child, context, environment)
   if (node.type === 'EnumeratedChord')
     return expandHarmonicSegment(node, (member) => evaluateExpression(member, context, environment))
-  if (
-    node.type === 'Group' ||
-    node.type === 'UnaryExpression' ||
-    node.type === 'PitchModifierExpression'
-  ) {
+  if (node.type === 'Group' || (isScoreOperation(node) && node.type !== 'BinaryExpression')) {
     const inner = node.type === 'Group' ? node.expression : node.operand
     const { expressions, diagnostics } = expand(inner)
     return {
@@ -36,13 +32,13 @@ export function expandEnumeratedChord(
       diagnostics,
     }
   }
-  // Multiplication pairs container members in the value evaluator, and
-  // fallback must select its operand before expanding either side.
+  // An enumerated chord can transpose a rhythm-bearing score in parallel.
+  // Arithmetic between values uses the elementwise rules instead.
   if (
     node.type === 'BinaryExpression' &&
-    node.operator !== '*' &&
-    node.operator !== 'al' &&
-    !isComparison(node.operator)
+    (node.operator === '+' || node.operator === '-') &&
+    ((isConstruction(node.left) && !supportsValueArithmetic(node.left)) ||
+      (isConstruction(node.right) && !supportsValueArithmetic(node.right)))
   ) {
     const left = expand(node.left)
     const right = expand(node.right)
@@ -116,11 +112,13 @@ type ScoreOperation = Extract<
 >
 
 function isScoreOperation(node: Expression): node is ScoreOperation {
-  if (node.type === 'UnaryExpression') return true
+  if (node.type === 'UnaryExpression') return node.operator !== '@not'
   if (node.type === 'PitchModifierExpression') return true
   return (
     node.type === 'BinaryExpression' &&
     node.operator !== 'al' &&
+    node.operator !== '@and' &&
+    node.operator !== '@or' &&
     node.operator !== '->' &&
     !isComparison(node.operator)
   )
@@ -193,10 +191,44 @@ function isScalarLeaf(node: Expression): boolean {
   return node.type !== 'EnumeratedChord' && !isConstruction(node) && !needsScorePlayback(node)
 }
 
-function isPlainChord(node: Expression): boolean {
-  if (node.type === 'Group') return isPlainChord(node.expression)
-  if (node.type === 'NormalizeToSlot' && node.expression) return isPlainChord(node.expression)
-  return node.type === 'Parallel' && node.branches.every(isScalarLeaf)
+function supportsValueArithmetic(node: Expression): boolean {
+  switch (node.type) {
+    case 'Group':
+      return supportsValueArithmetic(node.expression)
+    case 'NormalizeToSlot':
+      return !!node.expression && supportsValueArithmetic(node.expression)
+    case 'Sequence':
+      return node.items.every(supportsValueArithmetic)
+    case 'Parallel':
+      return node.branches.every(supportsValueArithmetic)
+    case 'PostfixExpression':
+      return false
+    default:
+      return !needsScorePlayback(node)
+  }
+}
+
+function canProduceContainer(node: Expression): boolean {
+  switch (node.type) {
+    case 'Identifier':
+    case 'CallExpression':
+    case 'IndexExpression':
+    case 'ConditionalExpression':
+    case 'EnumeratedChord':
+      return true
+    case 'Group':
+      return canProduceContainer(node.expression)
+    case 'UnaryExpression':
+    case 'PitchModifierExpression':
+      return isScoreOperation(node) && canProduceContainer(node.operand)
+    case 'BinaryExpression':
+      return (
+        (node.operator === 'al' || isScoreOperation(node)) &&
+        (canProduceContainer(node.left) || canProduceContainer(node.right))
+      )
+    default:
+      return isConstruction(node)
+  }
 }
 
 function zipScoreMembers(
@@ -267,11 +299,13 @@ export function broadcastScalarOperation(
   const lhs = isConstruction(right) && broadcastScalar(left, context, environment)
   const scalar = lhs || (isConstruction(left) && broadcastScalar(right, context, environment))
   const construction = lhs ? right : left
-  // A value expression can return a whole chord, so leave it intact when
-  // multiplying by a written chord that can be evaluated as a value.
+  // A reference or call can produce a container. Keep its shape intact for
+  // elementwise arithmetic with constructions that can be evaluated as values.
   if (
     !scalar ||
-    (node.operator === '*' && !isConstruction(lhs ? left : right) && isPlainChord(construction))
+    (!isConstruction(lhs ? left : right) &&
+      canProduceContainer(scalar) &&
+      supportsValueArithmetic(construction))
   )
     return left === node.left && right === node.right ? undefined : { ...node, left, right }
   return mapScoreMembers(construction, (member) => ({

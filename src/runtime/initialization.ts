@@ -112,9 +112,9 @@ export function evaluateInitialization(
       origin: settings.timeSignature.origin ?? new Fraction(0),
     }
   const diagnostics: Diagnostic[] = []
-  const evaluate = (context?: ScoreVisitorContext, collectDiagnostics = true) => {
+  const evaluate = (context?: ScoreVisitorContext) => {
     const result = evaluateProgramSemantics(program, { ...settings, ...context })
-    if (collectDiagnostics) diagnostics.push(...result.diagnostics)
+    diagnostics.push(...result.diagnostics)
     if (!('shape' in result)) return undefined
     const message = containsAttack(result.shape)
       ? 'Initialization sources cannot contain pitch-bearing expressions.'
@@ -130,18 +130,17 @@ export function evaluateInitialization(
       })
     return result
   }
-  const result = evaluate(contextAt(parent, new Fraction(0)))
+  const initialParentContext = contextAt(parent, new Fraction(0))
+  const result = evaluate(initialParentContext)
   if (!result) return { diagnostics }
   let initialization: ScoreInitialization
   if (result.shape.duration.n) {
-    const parentContexts = [
-      ...(parent.context ? [parent.context] : []),
-      ...(parent.changes?.map(({ context }) => context) ?? []),
-    ]
+    const parentContexts = new Set([initialParentContext])
+    for (const { start, context } of parent.changes ?? [])
+      if (start.compare(0) > 0) parentContexts.add(context)
     const variants = new Map<ScoreVisitorContext | undefined, ScoreInitialization>()
-    for (const context of parentContexts.length ? parentContexts : [undefined]) {
-      const evaluated =
-        context === contextAt(parent, new Fraction(0)) ? result : evaluate(context, false)
+    for (const context of parentContexts) {
+      const evaluated = context === initialParentContext ? result : evaluate(context)
       if (!evaluated || !('shape' in evaluated)) return { diagnostics }
       const base = evaluateProgramSemantics({ ...program, body: [] }, { ...settings, ...context })
       if (!('shape' in base) || !base.visitorContext) return { diagnostics }
@@ -153,7 +152,8 @@ export function evaluateInitialization(
       })
     }
     const starts = new Map<string, Fraction>()
-    for (const { start } of parent.changes ?? []) starts.set(start.toFraction(), start)
+    for (const { start } of parent.changes ?? [])
+      if (start.compare(0) >= 0) starts.set(start.toFraction(), start)
     for (const variant of variants.values())
       for (const { start } of variant.changes ?? []) starts.set(start.toFraction(), start)
     const changes = [...starts.values()]
@@ -162,7 +162,6 @@ export function evaluateInitialization(
         const parentContext = contextAt(parent, start)
         return { start, context: contextAt(variants.get(parentContext), start)! }
       })
-    const initialParentContext = contextAt(parent, new Fraction(0))
     initialization = {
       context: variants.get(initialParentContext)?.context,
       changes,

@@ -66,6 +66,21 @@ describe('directive runtime', () => {
     ).toMatchObject({ start: { offset: 26 }, end: { offset: 27 } })
   })
 
+  it.each(['=', ' =', '=!'] as const)(
+    'places and checks a barline on the continued slot grid with %s',
+    (continuation) => {
+      const result = compile(`@time(1/4) [C | D]${continuation}`)
+      expect(result.diagnostics).toEqual([])
+      if (!('score' in result)) throw new Error('Expected score.')
+      expect(
+        result.score.events
+          .find((event) => event.kind === 'marker' && event.marker === 'barline')
+          ?.start.toFraction(),
+      ).toBe('1')
+      expect(result.score.events.find((event) => event.label === 'D')?.start.toFraction()).toBe('1')
+    },
+  )
+
   it('restarts measure cycles at each time directive', () => {
     const result = compile('C @time(3/4) D E F | @time(2/4) G A |')
     expect(result.diagnostics.filter(({ code }) => code === 'XP_BARLINE_OFF_CYCLE')).toEqual([])

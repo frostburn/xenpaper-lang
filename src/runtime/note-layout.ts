@@ -5,7 +5,6 @@ import type { AttackShape, ContinueShape, ScoreShape, SourceOrigin } from './typ
 /** A written rhythmic slot and the sounding note it contributes can have different endpoints. */
 export interface PlacedNote {
   readonly pitch: AttackShape['pitch']
-  readonly slotStart: Fraction
   start: Fraction
   duration: Fraction
   origins: readonly SourceOrigin[]
@@ -16,12 +15,17 @@ export interface PlacedNote {
 interface SustainTarget {
   first: number
   last: number
-  // A normalized slot stretches from its written start. A chord or tie stretches
-  // from its earliest sounding note, which can follow rests in every branch.
   anchor?: Fraction
-  // Ties and synthetic glissando continuations can infer the span from the next mark.
   span?: Fraction
+  slot?: { first: number; last: number }
+  tieEnd?: Fraction
   unevenParallel?: boolean
+}
+
+interface PlacedShape {
+  readonly shape: ScoreShape
+  start: Fraction
+  end: Fraction
 }
 
 export type Sound = Pick<AttackShape, 'pitch' | 'duration' | 'origins' | 'automation'>
@@ -44,6 +48,8 @@ export interface LayoutVisitor {
 
 export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
   const notes: PlacedNote[] = []
+  const placements: PlacedShape[] = []
+  const events: (() => void)[] = []
   const orphaned: ContinueShape[] = []
   const diagnostics: Diagnostic[] = []
   function earliestOnset({ first, last }: SustainTarget): Fraction {
@@ -57,7 +63,6 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
   function sound(source: Sound, start: Fraction): PlacedNote {
     return {
       pitch: source.pitch,
-      slotStart: start,
       start,
       duration: source.duration,
       origins: source.origins,
@@ -65,22 +70,26 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
     }
   }
   function visit(node: ScoreShape, start: Fraction, active?: SustainTarget) {
-    if (node.isolatedDirectiveScope) visitor?.enterScope()
-    const next = walk(node, start, active)
-    if (node.isolatedDirectiveScope) visitor?.leaveScope(start.add(node.duration))
+    const position = { shape: node, start, end: start.add(node.duration) }
+    const index = placements.push(position) - 1
+    if (visitor && node.isolatedDirectiveScope) events.push(() => visitor.enterScope())
+    const next = walk(node, position, index, active)
+    if (visitor && node.isolatedDirectiveScope) events.push(() => visitor.leaveScope(position.end))
     return next
   }
   function walk(
     node: ScoreShape,
-    start: Fraction,
+    position: PlacedShape,
+    positionIndex: number,
     active?: SustainTarget,
   ): SustainTarget | undefined {
+    const { start, end } = position
     const first = notes.length
     switch (node.kind) {
       case 'attack': {
         const note = sound(node, start)
         notes.push(note)
-        visitor?.attack(node, note)
+        if (visitor) events.push(() => visitor.attack(node, note))
         return { first, last: notes.length, anchor: start, span: node.duration }
       }
       case 'rest':
@@ -88,7 +97,7 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
       case 'continue': {
         if (!active) {
           orphaned.push(node)
-          visitor?.orphan(node)
+          if (visitor) events.push(() => visitor.orphan(node))
           return
         }
         // Glissando targets are lowered to continuations internally.
@@ -102,21 +111,31 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
           })
           return active
         }
-        const anchor = active.anchor ?? earliestOnset(active)
+        const { tieEnd, slot } = active
+        const anchor = active.anchor ?? tieEnd ?? earliestOnset(active)
         const unit = active.span ?? node.duration
         const span = unit.add(node.duration)
-        const factor = unit.n ? span.div(unit) : new Fraction(1)
+        const factor = !tieEnd && unit.n ? span.div(unit) : new Fraction(1)
         for (let i = active.first; i < active.last; i++) {
           const note = notes[i]!
+          if (tieEnd && !note.start.add(note.duration).equals(tieEnd)) continue
           note.start = anchor.add(note.start.sub(anchor).mul(factor))
-          note.duration = unit.n ? note.duration.mul(factor) : note.duration.add(node.duration)
+          note.duration =
+            tieEnd || !unit.n ? note.duration.add(node.duration) : note.duration.mul(factor)
           note.origins = [...note.origins, ...node.origins]
           if (node.extendsAutomation === false) note.glideComplete = true
           if (note.automation && !note.glideComplete) {
             note.automation = { ...note.automation, duration: note.duration }
           }
         }
-        return { ...active, anchor, span }
+        if (slot) {
+          for (let i = slot.first; i < slot.last; i++) {
+            const placed = placements[i]!
+            placed.start = anchor.add(placed.start.sub(anchor).mul(factor))
+            placed.end = anchor.add(placed.end.sub(anchor).mul(factor))
+          }
+        }
+        return { ...active, anchor, span, ...(tieEnd && { tieEnd: tieEnd.add(node.duration) }) }
       }
       case 'sequence': {
         let cursor = start
@@ -124,36 +143,55 @@ export function layoutNotes(shape: ScoreShape, visitor?: LayoutVisitor) {
           active = visit(child, cursor, active)
           cursor = cursor.add(child.duration)
         }
-        if (!node.normalized && node.continuationTarget !== 'all') return active
+        if (!node.normalized && !node.continuationTarget) return active
         if (first === notes.length) return undefined
+        if (!node.normalized && node.continuationTarget === 'all')
+          return { first, last: notes.length }
+        if (!node.normalized) {
+          for (let i = first; i < notes.length; i++) {
+            const note = notes[i]!
+            if (note.start.add(note.duration).equals(end))
+              return { first, last: notes.length, tieEnd: end }
+          }
+          return undefined
+        }
         return {
           first,
           last: notes.length,
-          ...(node.normalized && { anchor: start, span: node.duration }),
+          anchor: start,
+          span: node.duration,
+          slot: { first: positionIndex, last: placements.length },
         }
       }
       case 'parallel':
         for (const branch of node.branches) {
-          visitor?.enterScope()
+          if (visitor) events.push(() => visitor.enterScope())
           visit(branch, start)
-          visitor?.leaveScope(start.add(node.duration))
+          if (visitor) events.push(() => visitor.leaveScope(position.end))
         }
         if (first === notes.length) return undefined
         const last = notes.length
-        if (node.normalized) return { first, last, anchor: start, span: node.duration }
+        if (node.normalized)
+          return {
+            first,
+            last,
+            anchor: start,
+            span: node.duration,
+            slot: { first: positionIndex, last: placements.length },
+          }
         const onset = notes[first]!.start
-        const release = start.add(node.duration)
         for (let i = first; i < last; i++) {
           const note = notes[i]!
-          if (!note.start.equals(onset) || !note.start.add(note.duration).equals(release))
+          if (!note.start.equals(onset) || !note.start.add(note.duration).equals(end))
             return { first, last, unevenParallel: true }
         }
-        return { first, last, anchor: onset, span: release.sub(onset) }
+        return { first, last, anchor: onset, span: end.sub(onset) }
       default:
-        visitor?.control(node, start, sound)
+        if (visitor) events.push(() => visitor.control(node, position.start, sound))
         return active
     }
   }
   visit(shape, new Fraction(0))
-  return { notes, orphaned, diagnostics }
+  events.forEach((event) => event())
+  return { notes, orphaned, diagnostics, placements }
 }

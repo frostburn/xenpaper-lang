@@ -264,6 +264,8 @@ describe('score control flow', () => {
     ['throw(1d)', 'XP_TYPE_MISMATCH'],
     ['ret C', 'XP_RETURN_SCOPE'],
     ['try { ret C } catch { D }', 'XP_RETURN_SCOPE'],
+    ['try { (C, D E)= } catch { F }', 'XP_UNEVEN_PARALLEL_CONTINUATION'],
+    ['try { (C, D E)=! } catch { F }', 'XP_UNEVEN_PARALLEL_CONTINUATION'],
     ['fn choose() { if(false) { ret C } } $ choose()', 'XP_MISSING_RETURN'],
     ['try { while(true) {} } catch { C }', 'XP_EXPANSION_LIMIT'],
     ['fn choose() { try { ret choose() } catch { ret C } } $ choose()', 'XP_RECURSION'],

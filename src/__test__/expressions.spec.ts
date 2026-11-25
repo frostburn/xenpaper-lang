@@ -222,6 +222,21 @@ describe('arithmetic expression evaluation', () => {
   })
 
   it.each([
+    ['sqrt(2) rd 2', 'sqrt(2)'],
+    ['2 rd sqrt(2)', '1'],
+    ['2 rdc sqrt(2)', 'sqrt(2)'],
+    ['2 ** 60 rdc 2', '2'],
+    ['2 ** -2000 rd 2', '1'],
+  ])('reduces %s without narrowing the input to a fraction', (source, expected) => {
+    expect(evaluate(source).value.strictEquals(evaluate(expected).value)).toBe(true)
+  })
+
+  it('reduces inexact positive ratios with the same endpoint rules', () => {
+    expect(evaluate('5.0r rd 2').value.valueOf()).toBeCloseTo(1.25)
+    expect(evaluate('4.0r rdc 2').value.valueOf()).toBe(2)
+  })
+
+  it.each([
     ['0 modc 3', 3],
     ['-6 modc 3', 3],
     ['7 modc 3', 1],

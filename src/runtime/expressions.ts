@@ -752,7 +752,7 @@ function geometricModulo(
     throw new TypeError('Geometric modulo requires ratio operands.')
   }
   const reduced = left.value.reduce(right.value)
-  const value = ceiling && reduced.equals(1) ? right.value : reduced
+  const value = ceiling && reduced.compare(1) === 0 ? right.value : reduced
   return result('scalar', value, operatorOrigins(left, right, node))
 }
 

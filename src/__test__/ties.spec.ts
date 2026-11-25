@@ -25,6 +25,22 @@ function timing(source: string) {
 }
 
 describe('binary ties', () => {
+  it('continues the last note of a tie with no matching pitches', () => {
+    expect(timing('(C -> D)= E')).toEqual(timing('(C D)= E'))
+  })
+
+  it('extends only the notes reaching the end of a matched tie', () => {
+    expect(timing('((C, E) -> (C, G))= F')).toEqual({
+      duration: '4',
+      notes: [
+        ['0', '3'],
+        ['0', '1'],
+        ['1', '2'],
+        ['3', '1'],
+      ],
+    })
+  })
+
   it('keeps the first sounding beat when tying a continued parallel', () => {
     expect(timing('((. C, . D) =) -> C')).toEqual({
       duration: '4',

@@ -446,7 +446,7 @@ export function constructStaffNotationShape(shape: ScoreShape): StaffNotationSha
         ...base,
       }
     case 'sequence':
-      if (shape.continuationTarget === 'all' && !shape.normalized)
+      if (shape.continuationTarget && !shape.normalized)
         return {
           kind: 'parallel',
           ...base,
