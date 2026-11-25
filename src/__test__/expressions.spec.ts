@@ -25,6 +25,13 @@ function evaluate(source: string) {
 }
 
 describe('arithmetic expression evaluation', () => {
+  it('reports errors in both operands of indexing', () => {
+    expect(evaluateExpression(expression('missingItems[missingIndex]')).diagnostics).toMatchObject([
+      { code: 'XP_UNDEFINED_NAME', message: 'Undefined name missingItems.' },
+      { code: 'XP_UNDEFINED_NAME', message: 'Undefined name missingIndex.' },
+    ])
+  })
+
   it('coerces tuned pitches for ratio-taking built-ins', () => {
     expect(evaluate('pitch(2d)').value.equals(evaluate('2d').value)).toBe(true)
     expect(evaluate('pitch((2d))').value.equals(evaluate('2d').value)).toBe(true)
