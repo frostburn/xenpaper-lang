@@ -116,6 +116,7 @@ interface VisitorScope {
   readonly timeScale: Fraction
   readonly layout?: boolean
   readonly timelineVisit?: TimelineVisit
+  readonly normalizationBase?: ScoreVisitorContext
   readonly lockedPulse?: Fraction
   readonly base: ScoreVisitorContext
   readonly resolve: ContextResolver
@@ -741,6 +742,15 @@ function playablePitch(
   }
 }
 
+function isNoteValue(result: ExpressionEvaluationResult): boolean {
+  return (
+    'value' in result &&
+    (result.value.kind === 'scalar' ||
+      result.value.kind === 'pitchOffset' ||
+      result.value.kind === 'absolutePitch')
+  )
+}
+
 /** Build the exact-duration score-shape tree for sequencing, parallelism, and slots. */
 export function evaluateScoreSemantics(
   node: Expression,
@@ -770,8 +780,7 @@ export function evaluateScoreSemantics(
       const visit = attacks.get(note.pitch)
       if (!visit) continue
       const beat = offset.add(note.start)
-      // A call or group that starts on this attack reads the same grid beat.
-      // An enclosing expression that starts earlier retains its own context.
+      // A call or group that starts on this attack shares its performance context.
       for (
         let owner: TimelineVisit | undefined = visit;
         owner?.offset.equals(visit.offset);
@@ -914,6 +923,11 @@ function evaluateScorePass(
     directiveState: context.directiveState,
     environment: context.lexicalEnvironment,
   })
+
+  const structureContext = (visitor: ScoreVisitor) => {
+    const { normalizationBase, resolve } = visitor.scope
+    return normalizationBase && resolveContext(resolve, normalizationBase)
+  }
 
   const changeVisitor = (
     visitor: ScoreVisitor,
@@ -1132,12 +1146,15 @@ function evaluateScorePass(
       directiveState: currentDirectiveState,
       environment,
     } = visitor.scope
+    const structure = structureContext(visitor)
+    const structurePitch = structure?.pitchContext ?? context
+    const structureEnvironment = structure ? structure.lexicalEnvironment : environment
     if (current.type === 'BindingAssignment') {
-      const evaluated = evaluateExpression(current.value, context, environment)
+      const evaluated = evaluateExpression(current.value, structurePitch, structureEnvironment)
       if (!('value' in evaluated)) return evaluated
       const name = current.name.name
       const value = evaluated.value
-      const updated = assignBinding(environment, name, value)
+      const updated = assignBinding(structureEnvironment, name, value)
       if (!updated)
         return {
           diagnostics: [
@@ -1153,7 +1170,7 @@ function evaluateScorePass(
       const next = changeVisitor(visitor, (context) => ({
         ...context,
         lexicalEnvironment:
-          context.lexicalEnvironment === environment
+          context.lexicalEnvironment === structureEnvironment
             ? updated
             : (assignBinding(context.lexicalEnvironment, name, value) ??
               context.lexicalEnvironment),
@@ -1183,7 +1200,7 @@ function evaluateScorePass(
       return { shape: sequence([], [origin(current)]), diagnostics: [] }
     }
     if (current.type === 'IfBlock') {
-      const condition = evaluateExpression(current.condition, context, environment)
+      const condition = evaluateExpression(current.condition, structurePitch, structureEnvironment)
       if (!('value' in condition)) return condition
       const branch = isTruthy(condition.value) ? current.consequent : current.alternate
       if (!branch)
@@ -1198,7 +1215,7 @@ function evaluateScorePass(
       )
     }
     if (current.type === 'ThrowStatement')
-      return { diagnostics: evaluateThrow(current, context, environment) }
+      return { diagnostics: evaluateThrow(current, structurePitch, structureEnvironment) }
     if (current.type === 'ReturnStatement')
       return {
         diagnostics: [
@@ -1240,7 +1257,7 @@ function evaluateScorePass(
       return restoreBlockScope(visitBlock(current.handler, handler), handler, visitor)
     }
     if (current.type === 'ForBlock') {
-      const iterable = evaluateExpression(current.iterable, context, environment)
+      const iterable = evaluateExpression(current.iterable, structurePitch, structureEnvironment)
       if (!('value' in iterable)) return iterable
       const diagnostics = [...iterable.diagnostics]
       if (iterable.value.kind !== 'container') {
@@ -1305,10 +1322,11 @@ function evaluateScorePass(
       let elapsed = new Fraction(0)
       for (;;) {
         active = at(active, visitor.scope.offset.add(elapsed.mul(visitor.scope.timeScale)))
+        const conditionContext = structureContext(active) ?? visitorContext(active)
         const condition = evaluateExpression(
           current.condition,
-          active.scope.context,
-          active.scope.environment,
+          conditionContext.pitchContext,
+          conditionContext.lexicalEnvironment,
         )
         diagnostics.push(...condition.diagnostics)
         if (!('value' in condition)) return { diagnostics }
@@ -1387,8 +1405,8 @@ function evaluateScorePass(
     if (current.type === 'CallExpression') {
       const returned = evaluateFunctionCall(
         current,
-        context,
-        environment,
+        structurePitch,
+        structureEnvironment,
         (expression, scope, protectedReturn) =>
           changeVisitor(visitor, (context) => ({
             ...context,
@@ -1410,9 +1428,9 @@ function evaluateScorePass(
         }
       }
     }
-    const broadcast = broadcastScalarOperation(current, context, environment)
+    const broadcast = broadcastScalarOperation(current, structurePitch, structureEnvironment)
     if (broadcast) return visitor.visit(broadcast)
-    const expandedChord = expandEnumeratedChord(current, context, environment)
+    const expandedChord = expandEnumeratedChord(current, structurePitch, structureEnvironment)
     if (expandedChord.diagnostics.length) return { diagnostics: expandedChord.diagnostics }
     if (expandedChord.expressions.length !== 1 || expandedChord.expressions[0] !== current) {
       const results = expandedChord.expressions.map((expression) => visitor.visit(expression))
@@ -1701,10 +1719,12 @@ function evaluateScorePass(
           item.expansionPath ?? visitor.scope.expansionPath,
         )
         if (item.type === 'VariableDeclaration' || item.type === 'FunctionDeclaration') {
+          const declarationContext =
+            structureContext(activeVisitor) ?? visitorContext(activeVisitor)
           const declared = evaluateDeclaration(
             item,
-            activeVisitor.scope.context,
-            activeVisitor.scope.environment,
+            declarationContext.pitchContext,
+            declarationContext.lexicalEnvironment,
             activeVisitor.scope.declarationScope,
           )
           if (declared.diagnostics.some(({ severity }) => severity === 'error')) {
@@ -1804,10 +1824,11 @@ function evaluateScorePass(
             results.push({ shape, diagnostics: extended.diagnostics })
             continue
           }
+          const directiveContext = structureContext(activeVisitor) ?? visitorContext(activeVisitor)
           const resolved = resolveDirective(
             item,
-            activeVisitor.scope.context,
-            activeVisitor.scope.environment,
+            directiveContext.pitchContext,
+            directiveContext.lexicalEnvironment,
           )
           const directive = resolved.directive
           if (directive?.kind === 'tempo' && !options.allowTempoDirective) {
@@ -2265,6 +2286,11 @@ function evaluateScorePass(
         loop: undefined,
         subdivisionContext: visitor.scope.resolve,
         declarationScope: {},
+        // Nested slots share the containing slot's phrase selection. A later
+        // slot or repeat occurrence takes a new snapshot at its own entry beat.
+        normalizationBase:
+          visitor.scope.normalizationBase ??
+          (timeline && (contextAt(options.initialization, visitor.scope.offset) ?? base)),
       }
       let evaluated = visitor.visit(current.expression, { ...local, layout: true })
       if (!('shape' in evaluated)) return evaluated
@@ -2439,16 +2465,16 @@ function evaluateScorePass(
         return { shape: withOccurrence(contextAnnotation(current), visitor), diagnostics: [] }
       }
     }
-    const value = evaluateExpression(current, context, environment)
+    let value = evaluateExpression(current, structurePitch, structureEnvironment)
     if ('value' in value && value.value.kind === 'scoreFragment') {
       const fragment = value.value
       const scope = changeVisitor(visitor, (context) => ({
         ...context,
         lexicalEnvironment: {
           ...extendLexicalEnvironment(fragment.environment, {
-            calls: environment?.calls ?? EMPTY_LEXICAL_ENVIRONMENT.calls,
+            calls: structureEnvironment?.calls ?? EMPTY_LEXICAL_ENVIRONMENT.calls,
           }),
-          functionBudget: environment?.functionBudget,
+          functionBudget: structureEnvironment?.functionBudget,
         },
       })).spawn({ loop: undefined, subdivisionContext: visitor.scope.resolve })
       const body: Extract<Expression, { type: 'Sequence' }> =
@@ -2502,11 +2528,27 @@ function evaluateScorePass(
       const expression = fragment(value.value)
       const result = changeVisitor(visitor, (context) => ({
         ...context,
-        lexicalEnvironment: extendLexicalEnvironment(environment ?? EMPTY_LEXICAL_ENVIRONMENT, {
-          variables,
-        }),
+        lexicalEnvironment: extendLexicalEnvironment(
+          structureEnvironment ?? EMPTY_LEXICAL_ENVIRONMENT,
+          {
+            variables,
+          },
+        ),
       })).visit(expression)
       return { ...result, diagnostics: [...value.diagnostics, ...result.diagnostics] }
+    }
+    if (structurePitch !== context || structureEnvironment !== environment) {
+      // A final-beat read can update a note. A phrase at that beat applies
+      // when the next structural lookup reaches it.
+      const attack = evaluateExpression(current, context, environment)
+      if (isNoteValue(attack)) value = attack
+      else if (isNoteValue(value)) {
+        const tuned =
+          structureEnvironment === environment
+            ? attack
+            : evaluateExpression(current, context, structureEnvironment)
+        if (isNoteValue(tuned) || !('value' in tuned)) value = tuned
+      } else if (!('value' in attack)) value = attack
     }
     const evaluated = playablePitch(current, context, value)
     if (!('pitch' in evaluated)) return evaluated
