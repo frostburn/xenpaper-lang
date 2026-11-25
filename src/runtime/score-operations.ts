@@ -43,7 +43,14 @@ export function expandEnumeratedChord(
       diagnostics,
     }
   }
-  if (node.type === 'BinaryExpression' && !isComparison(node.operator)) {
+  // Multiplication pairs container members in the value evaluator, and
+  // fallback must select its operand before expanding either side.
+  if (
+    node.type === 'BinaryExpression' &&
+    node.operator !== '*' &&
+    node.operator !== 'al' &&
+    !isComparison(node.operator)
+  ) {
     const left = expand(node.left)
     const right = expand(node.right)
     return {
@@ -134,7 +141,12 @@ type ScoreOperation = Extract<
 function isScoreOperation(node: Expression): node is ScoreOperation {
   if (node.type === 'UnaryExpression') return true
   if (node.type === 'PitchModifierExpression') return true
-  return node.type === 'BinaryExpression' && !isComparison(node.operator) && node.operator !== '->'
+  return (
+    node.type === 'BinaryExpression' &&
+    node.operator !== 'al' &&
+    node.operator !== '->' &&
+    !isComparison(node.operator)
+  )
 }
 
 function isConstruction(node: Expression): boolean {
@@ -204,6 +216,12 @@ function isScalarLeaf(node: Expression): boolean {
   return node.type !== 'EnumeratedChord' && !isConstruction(node) && !needsScorePlayback(node)
 }
 
+function isPlainChord(node: Expression): boolean {
+  if (node.type === 'Group') return isPlainChord(node.expression)
+  if (node.type === 'NormalizeToSlot' && node.expression) return isPlainChord(node.expression)
+  return node.type === 'Parallel' && node.branches.every(isScalarLeaf)
+}
+
 function zipScoreMembers(
   left: ScoreExpression,
   right: ScoreExpression,
@@ -271,9 +289,14 @@ export function broadcastScalarOperation(
   }
   const lhs = isConstruction(right) && broadcastScalar(left, context, environment)
   const scalar = lhs || (isConstruction(left) && broadcastScalar(right, context, environment))
-  if (!scalar)
-    return left === node.left && right === node.right ? undefined : { ...node, left, right }
   const construction = lhs ? right : left
+  // A value expression can return a whole chord, so leave it intact when
+  // multiplying by a written chord that can be evaluated as a value.
+  if (
+    !scalar ||
+    (node.operator === '*' && !isConstruction(lhs ? left : right) && isPlainChord(construction))
+  )
+    return left === node.left && right === node.right ? undefined : { ...node, left, right }
   const mapped = mapScoreMembers(construction, (member) => ({
     ...node,
     left: lhs ? scalar.expression : member,
