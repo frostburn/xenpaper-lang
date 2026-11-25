@@ -264,18 +264,75 @@ for (value of [true]) { chosen <- value $ . }
     )
   })
 
-  it('settles normalized timing when a reassigned variable changes its length', () => {
-    const global = initialize('let phrase <- C $ [. $ phrase <- (D E) $ ..]')
-    const result = notes('[phrase phrase]', global)
-    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1/3', '2/3'])
+  it.each([
+    '[phrase phrase]',
+    'fn emit(part) { ret part } $ [emit(phrase) emit(phrase)]',
+    '[[phrase] [phrase]]',
+  ])('chooses phrase structure at the outer slot entry in %s', (source) => {
+    const global = initialize('let phrase <- C $ [. $ phrase <- (D E) $ .]')
+    const result = score(source, global)
+    const events = result.events.filter((event) => event.kind === 'note')
+    expect(result.duration.toFraction()).toBe('1')
+    expect(
+      events.map(({ start, duration }) => [start.toFraction(), duration.toFraction()]),
+    ).toEqual([
+      ['0', '1/2'],
+      ['1/2', '1/2'],
+    ])
+    expect(events.map(({ pitch }) => pitch.value.valueOf())).toEqual([0, 0])
   })
 
-  it('diagnoses a normalized rhythm with no consistent placement of a global switch', () => {
-    const global = initialize('let phrase <- C $ [. $ phrase <- (D E) $ .]')
-    const result = expandToBeatEvents(parse('[phrase phrase]'), { initialization: global })
-    expect(result).not.toHaveProperty('score')
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'XP_TIMELINE_LAYOUT' }),
+  it('takes a new phrase binding at the next slot and repeat occurrence', () => {
+    const global = initialize('@time(1/4) let phrase <- C $ . $ phrase <- (D E)')
+    const result = notes('|: [phrase phrase] :|', global)
+    expect(result.map(({ start }) => start.toFraction())).toEqual([
+      '0',
+      '1/2',
+      '1',
+      '5/4',
+      '3/2',
+      '7/4',
+    ])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual(
+      notes('C C D E D E', initialize('')).map(({ pitch }) => pitch.value.valueOf()),
+    )
+  })
+
+  it('keeps the selected phrase when the timed binding becomes a single note', () => {
+    const global = initialize('let phrase <- (C D) $ [. $ phrase <- E $ .]')
+    const result = notes('[phrase phrase]', global)
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1/4', '1/2', '3/4'])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual(
+      notes('C D C D', initialize('')).map(({ pitch }) => pitch.value.valueOf()),
+    )
+  })
+
+  it('reads single-note bindings at their final attack beats after a continuation', () => {
+    const global = initialize('let tone <- 1d $ . $ tone <- 2d $ {24edo} @f')
+    const result = notes('[tone tone]=', global)
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1'])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual([100, 100])
+    expect(result.map(({ dynamic }) => dynamic.toFraction())).toEqual(['1/2', '13/20'])
+  })
+
+  it('uses the slot entry to decide control flow that expands a phrase', () => {
+    const global = initialize('let longer <- false $ [. $ longer <- true $ .]')
+    const result = notes('[C $ if(longer) { D E } else { F }]', global)
+    expect(result.map(({ label, start }) => [label, start.toFraction()])).toEqual([
+      ['C', '0'],
+      ['F', '1/2'],
+    ])
+  })
+
+  it('applies local bindings and tuning to structural selection and attack reads', () => {
+    const global = initialize('let phrase <- C $ [. $ phrase <- (D E) $ {24edo} .]')
+    const result = notes('[let phrase <- (1d 2d) $ {12edo} phrase]', global)
+    expect(result.map(({ start }) => start.toFraction())).toEqual(['0', '1/2'])
+    expect(result.map(({ pitch }) => pitch.value.valueOf())).toEqual([100, 200])
+
+    const local = notes('[let phrase <- D $ phrase $ phrase <- F $ phrase]', global)
+    expect(local.map(({ pitch }) => pitch.value.valueOf())).toEqual(
+      notes('D F', initialize('')).map(({ pitch }) => pitch.value.valueOf()),
     )
   })
 

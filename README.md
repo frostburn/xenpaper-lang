@@ -153,8 +153,8 @@ root frequency fixed.
 `evaluateInitialization()` compiles an enclosing zero-duration source, or a
 global timeline with `allowDuration: true`. Pass the returned `initialization`
 to another initialization or to score evaluation. A clip's `beatOffset` is an
-exact `Fraction`; global context is selected at each expression's absolute grid
-position, before evaluation. Local groups and function calls retain their scopes.
+exact `Fraction`. Global context is selected at absolute grid positions.
+Local groups and function calls retain their scopes.
 
 ```ts
 import { evaluateInitialization, expandToBeatEvents, parse } from 'xenpaper-lang'
@@ -179,10 +179,13 @@ conversion to seconds. `gridMeasureBoundaries()` enumerates rational measure
 positions without floating-point accumulation. Bar rests and barline checks
 use the same prevailing meter during evaluation.
 
-Normalized slots establish their rhythm before looking up timed contexts at
-their scaled positions. If a context-dependent expression changes that rhythm,
-layout is resolved again; a cyclic or non-converging layout is diagnosed rather
-than assigned inconsistent note positions.
+The entry beat of an outer normalized slot selects globally bound phrases,
+function arguments, and control flow for that slot and its nested slots.
+A timed reassignment can replace a phrase when a later slot or repeat
+occurrence enters with the new binding. A single-note expression can read a
+new note value at its final attack beat. Local declarations and assignments
+take precedence in their lexical scope, and function closures retain their
+captured bindings.
 
 The global timeline applies to expanded note positions, including repeats and
 stretched slots. For example, the continuation in `[. 1d]=` places `1d` at beat 1
