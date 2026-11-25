@@ -822,7 +822,6 @@ function binary(
   right: EvaluatedLiteral,
   node: Expression,
 ): EvaluatedLiteral {
-  if (operator === 'al') return left.kind === 'undefined' ? right : left
   if (operator === '+' && left.kind === 'string' && right.kind === 'string')
     return stringValue(left.text + right.text, operatorOrigins(left, right, node))
   if (left.kind === 'container' || right.kind === 'container') {
@@ -1003,6 +1002,8 @@ function modifyPitch(
   node: Extract<Expression, { type: 'PitchModifierExpression' }>,
   mapping: PrimeMapping | PitchContext,
 ): EvaluatedLiteral {
+  if (operand.kind === 'container')
+    return { ...operand, values: operand.values.map((item) => modifyPitch(item, node, mapping)) }
   const modifier = node.modifier.kind
   const origins: SourceOrigin[] = [
     ...operand.origins,
@@ -1077,6 +1078,8 @@ function applyUnary(
   mapping: PrimeMapping | PitchContext,
 ): EvaluatedLiteral {
   const { operator } = node
+  if (operand.kind === 'container' && operator !== '@not')
+    return { ...operand, values: operand.values.map((item) => applyUnary(node, item, mapping)) }
   const origins: SourceOrigin[] = [
     ...operand.origins,
     { location: node.location, role: 'operator' },

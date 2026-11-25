@@ -335,6 +335,21 @@ Harmonic segments are iterable ratio containers in value expressions.
 `1/1`, `6/5`, `7/5`, and `8/5`. When played directly in a score, the
 segment remains a chord.
 
+Multiplying two harmonic chords with `*` pairs their notes in order and
+requires the same number of notes in each chord. This applies to written
+chords, bindings, and function results. To play every pair of harmonics,
+multiply each note of one chord by the whole second chord, flatten the result,
+and play the products in parallel.
+
+```text
+let higher <- 6::8
+asParallel(flat(arrayMap((note) => note * higher, 4::5)))
+```
+
+The fallback operator `al` uses the left operand whenever it has a value.
+When the left operand is `niente`, Xenpaper evaluates and plays the right
+operand. For example, `C al [D E]` plays a single C.
+
 The prelude's scale builders `cps` and `eulerGenus` return plain sequences.
 Play a result directly to hear one degree per current slot, or wrap the call
 in brackets to fit the run into one slot. Use `asParallel(eulerGenus(45))`

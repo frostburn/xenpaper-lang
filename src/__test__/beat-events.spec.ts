@@ -12,7 +12,7 @@ const score = (source: string) => {
   return result.score
 }
 
-const audibleResult = (source: string) => {
+const audibleResult = (source: string, includeLabels = true) => {
   const result = score(source)
   return {
     duration: result.duration.toFraction(),
@@ -23,17 +23,71 @@ const audibleResult = (source: string) => {
         start: event.start.toFraction(),
         duration: event.duration.toFraction(),
         pitch: [event.pitch.kind, event.pitch.value.valueOf()],
-        ...('label' in event ? { label: event.label } : {}),
+        ...(includeLabels && 'label' in event ? { label: event.label } : {}),
         ...('dynamic' in event ? { dynamic: event.dynamic.toFraction() } : {}),
       })),
   }
 }
 
 describe('beat event expansion', () => {
-  it('plays every pair of harmonics when two enumerated chords are multiplied', () => {
-    const writtenOut = '(1/1 * 1/1, 1/1 * 7/6, 1/1 * 4/3), (5/4 * 1/1, 5/4 * 7/6, 5/4 * 4/3)'
-    expect(audibleResult('4::5 * 6::8')).toEqual(audibleResult(writtenOut))
+  it.each([
+    '4::6 * 6::8',
+    'let lower <- 4::6 $ 6::8 * lower',
+    'let lower <- 4::6 $ lower * 6::8',
+    'let lower <- 4::6 $ let higher <- 6::8 $ lower * higher',
+    'fn higher() { ret 6::8 } $ 4::6 * higher()',
+    'fn product() { ret 4::6 * 6::8 } $ product()',
+    'let product <- 4::6 * 6::8 $ product',
+    'let higher <- 6::8 $ (1/1, 5/4, 3/2) * higher',
+  ])('plays the elementwise chord product in %s', (source) => {
+    expect(audibleResult(source, false)).toEqual(audibleResult('(1/1, 35/24, 2/1)', false))
   })
+
+  it.each([
+    '4::5 * 6::8',
+    'let lower <- 4::5 $ let higher <- 6::8 $ lower * higher',
+    'fn higher() { ret 6::8 } $ 4::5 * higher()',
+  ])('rejects mismatched chord lengths in %s', (source) => {
+    const result = expandToBeatEvents(parse(source))
+    expect(result.diagnostics).toMatchObject([
+      { code: 'XP_TYPE_MISMATCH', message: 'Container operands must have the same length.' },
+    ])
+  })
+
+  it.each([
+    ['{12edo} ~(4::6 * 6::8)', '{12edo} (~1/1, ~35/24, ~2/1)'],
+    ["'(4::6 * 6::8)", "'(1/1, 35/24, 2/1)"],
+  ])('applies pitch operators to each product in %s', (source, expected) => {
+    expect(audibleResult(source)).toEqual(audibleResult(expected))
+  })
+
+  it('plays all harmonic pairs when explicitly mapped and flattened', () => {
+    const writtenOut = '(1/1 * 1/1, 1/1 * 7/6, 1/1 * 4/3), (5/4 * 1/1, 5/4 * 7/6, 5/4 * 4/3)'
+    const source = 'let higher <- 6::8 $ asParallel(flat(arrayMap((note) => note * higher, 4::5)))'
+    expect(audibleResult(source)).toEqual(audibleResult(writtenOut))
+  })
+
+  it.each([
+    ['C al [D E]', 'C'],
+    ['C al 1::10001', 'C'],
+    ['4::6 al 1::10001', '4::6'],
+    ['(C al 1::10001) + M2', 'C + M2'],
+    ['(C al [D E]) + M2', 'C + M2'],
+    ['let phrase <- C al 1::10001 $ phrase', 'C'],
+    ['niente al [D E]', '[D E]'],
+    ['let phrase <- niente al [D E] $ phrase', '[D E]'],
+    ['niente al (C . D=)', 'C . D='],
+  ])('plays only the selected operand in %s', (source, expected) => {
+    expect(audibleResult(source, false)).toEqual(audibleResult(expected, false))
+  })
+
+  it.each(['niente al 1::10001', '1::10001 al C'])(
+    'reports expansion limits for the evaluated operand in %s',
+    (source) => {
+      const result = expandToBeatEvents(parse(source))
+      expect(result.diagnostics).toMatchObject([{ code: 'XP_EXPANSION_LIMIT' }])
+    },
+  )
 
   it('keeps branch rhythms when broadcasting over a harmonic chord', () => {
     const result = score('(C E, D=) + 4::6')
