@@ -22,7 +22,7 @@ import type {
   StringValue,
   SourceOrigin,
 } from './types.js'
-import type { PitchContext, PrimeMapping } from './types.js'
+import type { MosContext, PitchContext, PrimeMapping } from './types.js'
 import {
   callableArity,
   EMPTY_LEXICAL_ENVIRONMENT,
@@ -563,10 +563,12 @@ function addOrSubtract(
   if (left.kind === 'absolutePitch' || right.kind === 'absolutePitch') {
     if (left.kind === 'absolutePitch' && right.kind === 'absolutePitch') {
       if (!subtract) throw new TypeError('Absolute pitches cannot be added together.')
+      const mos = left.mos?.context
       return {
         kind: 'pitchOffset',
         value: left.rootOffset.sub(right.rootOffset),
         spelling: spellPitchDifference(left, right),
+        ...(mos && right.mos?.context === mos && { mosContext: mos }),
         origins,
       }
     }
@@ -909,10 +911,15 @@ function containerItems(
   )
 }
 
-function pitchOperatorDisplacement(context: PitchContext, modifier: string): Value {
+function pitchOperatorDisplacement(
+  context: PitchContext,
+  modifier: string,
+  mos?: MosContext,
+): Value {
   const inflection = requirePitchOperator(
     context,
     modifier === 'up' || modifier === 'down' ? 'up' : 'lift',
+    mos,
   )
   return modifier === 'down' || modifier === 'drop' ? inflection.neg() : inflection
 }
@@ -1012,31 +1019,31 @@ function modifyPitch(
 
   const context = pitchContextFor(mapping)
   const registers = modifierEquaveShift(modifier)
-  // Scalar ratios and numbered degrees use the scale's equave. Other offsets
-  // use the notation equave, and absolute non-MOS pitches map the written octave.
-  const writtenEquave = context.mos?.equave ?? Value.cents(1200)
+  const absoluteMos = operand.kind === 'absolutePitch' ? operand.mos : undefined
+  const mos = operand.kind === 'pitchOffset' ? operand.mosContext : absoluteMos?.context
+  // Stored MOS pitches and intervals carry their own notation. Degrees and
+  // scalar ratios use the current scale, and other absolute pitches map the octave.
   let shift: Value
   if (registers) {
-    let equave = writtenEquave
+    let equave = mos?.equave ?? context.mos?.equave ?? Value.cents(1200)
     if (
       operand.kind === 'scalar' ||
       (operand.kind === 'pitchOffset' && operand.scaleDegree !== undefined)
     )
       equave = context.degreeEquave
-    else if (operand.kind === 'absolutePitch')
-      equave = operand.mos?.context.equave ?? context.mapping.mapPrime(2)
+    else if (operand.kind === 'absolutePitch' && !absoluteMos) equave = context.mapping.mapPrime(2)
     shift = equave.mul(new Value(registers))
-  } else shift = pitchOperatorDisplacement(context, modifier)
+  } else shift = pitchOperatorDisplacement(context, modifier, mos)
   if (operand.kind === 'scalar')
     return result('scalar', operand.value.mul(Value.ratio(shift)), origins)
 
   let formula = operand.formula
   if (formula && registers) {
     const shifted = new Map(formula)
-    const written =
-      operand.kind === 'absolutePitch' && !operand.mos ? Value.cents(1200) : writtenEquave
-    for (const [prime, power] of written.primeExponents() ?? [])
-      shifted.set(prime, (shifted.get(prime) ?? new Fraction(0)).add(power.mul(registers)))
+    const writtenShift =
+      operand.kind === 'absolutePitch' && !absoluteMos ? Value.cents(1200 * registers) : shift
+    for (const [prime, power] of writtenShift.primeExponents() ?? [])
+      shifted.set(prime, (shifted.get(prime) ?? new Fraction(0)).add(power))
     formula = shifted
   }
   const modifiers = [modifier, ...(operand.spelling?.modifiers ?? [])]
@@ -1046,6 +1053,14 @@ function modifyPitch(
       rootOffset: operand.rootOffset.add(shift),
       formula: formula!,
       spelling: { ...operand.spelling, modifiers },
+      ...(absoluteMos && registers
+        ? {
+            mos: {
+              ...absoluteMos,
+              rank: absoluteMos.rank + registers * absoluteMos.context.nominals.size,
+            },
+          }
+        : {}),
       origins,
     }
   return {

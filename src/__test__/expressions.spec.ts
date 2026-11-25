@@ -25,6 +25,13 @@ function evaluate(source: string) {
 }
 
 describe('arithmetic expression evaluation', () => {
+  it('reports errors in both operands of indexing', () => {
+    expect(evaluateExpression(expression('missingItems[missingIndex]')).diagnostics).toMatchObject([
+      { code: 'XP_UNDEFINED_NAME', message: 'Undefined name missingItems.' },
+      { code: 'XP_UNDEFINED_NAME', message: 'Undefined name missingIndex.' },
+    ])
+  })
+
   it('consults a custom prime mapping only when the expression needs it', () => {
     const mapping = {
       id: 'unmapped',

@@ -35,6 +35,25 @@ describe('beat event expansion', () => {
     expect(audibleResult('4::5 * 6::8')).toEqual(audibleResult(writtenOut))
   })
 
+  it('keeps branch rhythms when broadcasting over a harmonic chord', () => {
+    const result = score('(C E, D=) + 4::6')
+    const notes = result.events.filter((event) => event.kind === 'note')
+    expect(result.duration.toFraction()).toBe('2')
+    expect(notes.map(({ start, duration }) => [start.toFraction(), duration.toFraction()])).toEqual(
+      [
+        ['0', '1'],
+        ['0', '2'],
+        ['0', '1'],
+        ['0', '2'],
+        ['0', '1'],
+        ['0', '2'],
+        ['1', '1'],
+        ['1', '1'],
+        ['1', '1'],
+      ],
+    )
+  })
+
   it('carries the same paths through transposition as through repeat expansion', () => {
     const program = parse('(C :| D :|) + M2 $ E')
     const paths = expandRepeats(parse(' C :| D :| E')).program!.body.map(

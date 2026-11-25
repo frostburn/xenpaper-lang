@@ -1090,8 +1090,12 @@ function applyMosDeclaration(declaration: MosDeclaration, context: PitchContext)
   return applySignatureDeclaration(signatureDeclaration, result)
 }
 
-export function requirePitchOperator(context: PitchContext, operator: 'up' | 'lift'): Value {
-  const value = context.mos ? context.mos[operator] : context[operator]
+export function requirePitchOperator(
+  context: PitchContext,
+  operator: 'up' | 'lift',
+  mos = context.mos,
+): Value {
+  const value = mos ? mos[operator] : context[operator]
   if (!value)
     throw new TypeError(
       `Cannot derive the MOS ${operator} interval because the scale has no equal-temperament host.`,
@@ -1433,6 +1437,7 @@ export function evaluateMosIntervalLiteral(
   return {
     kind: 'pitchOffset',
     value,
+    mosContext: context.mos,
     spelling: { quality: node.quality, number: BigInt(degree), raw: node.raw, modifiers: [] },
     origins: [{ location: node.location, role: 'literal' }],
   }

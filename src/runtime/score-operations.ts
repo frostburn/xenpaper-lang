@@ -163,6 +163,8 @@ function mapScoreMembers(
 ): ScoreExpression {
   const visit = (item: ScoreExpression) => mapScoreMembers(item, operation)
   function apply(item: ScoreExpression) {
+    // An empty slot is a rest when the visitor reaches it in the score.
+    if (item.type === 'NormalizeToSlot' && !item.expression) return item
     const updated = operation(item)
     return item.expansionPath ? { ...updated, expansionPath: item.expansionPath } : updated
   }
@@ -218,7 +220,7 @@ function zipScoreMembers(
     return expression && { ...left, expression }
   }
   if (left.type === 'NormalizeToSlot' && right.type === 'NormalizeToSlot') {
-    if (!left.expression && !right.expression) return { ...operator, left, right }
+    if (!left.expression && !right.expression) return left
     if (!left.expression || !right.expression) return
     const expression = zip(left.expression, right.expression)
     return expression && { ...left, expression }
