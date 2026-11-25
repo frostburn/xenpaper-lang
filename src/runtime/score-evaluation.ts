@@ -148,7 +148,274 @@ type BroadcastScalar = {
   continuations: Extract<Expression, { type: 'PostfixExpression' }>['marks']
 }
 
-/** Unwrap a single pitch expression together with the performance context authored around it. */
+function isScoreConstruction(node: Expression): boolean {
+  switch (node.type) {
+    case 'Group':
+      return isScoreConstruction(node.expression)
+    case 'UnaryExpression':
+    case 'PitchModifierExpression':
+      return isScoreConstruction(node.operand)
+    case 'BinaryExpression':
+      return node.operator === '->'
+    case 'PostfixExpression':
+    case 'Parallel':
+    case 'Sequence':
+    case 'Repeat':
+    case 'RepeatChain':
+      return true
+    case 'NormalizeToSlot':
+      return node.expression !== null
+    default:
+      return false
+  }
+}
+
+function isPitchLeaf(node: Expression): boolean {
+  switch (node.type) {
+    case 'Rest':
+    case 'BarRest':
+    case 'Barline':
+    case 'Directive':
+    case 'HardBoundary':
+    case 'DetachedContinue':
+    case 'PitchContextChange':
+      return false
+    default:
+      return true
+  }
+}
+
+function plainScalar(node: Expression): boolean {
+  while (node.type === 'Group') node = node.expression
+  return isPitchLeaf(node) && node.type !== 'EnumeratedChord' && !isScoreConstruction(node)
+}
+
+/** Preserve the written grid and apply an operation at each pitch-bearing leaf. */
+function mapScoreConstruction(
+  node: ScoreExpression,
+  transform: (leaf: ScoreExpression) => ScoreExpression,
+): ScoreExpression {
+  const map = (child: Expression) => mapScoreConstruction(child, transform)
+  switch (node.type) {
+    case 'UnaryExpression':
+    case 'PitchModifierExpression':
+      if (isScoreConstruction(node.operand))
+        return mapScoreConstruction(node.operand, (leaf) => ({
+          ...node,
+          operand: transform(leaf),
+          expansionPath: leaf.expansionPath ?? node.expansionPath,
+        }))
+      return transform(node)
+    case 'Group':
+    case 'PostfixExpression':
+      return { ...node, expression: map(node.expression) }
+    case 'NormalizeToSlot':
+      return { ...node, expression: node.expression && map(node.expression) }
+    case 'Parallel':
+      return { ...node, branches: node.branches.map(map) }
+    case 'Sequence':
+      return { ...node, items: node.items.map(map) }
+    case 'Repeat':
+      return {
+        ...node,
+        body: node.body.map(map),
+        endings: node.endings.map((ending) => ({ ...ending, body: ending.body.map(map) })),
+      }
+    case 'RepeatChain':
+      return { ...node, repeats: node.repeats.map((repeat) => map(repeat) as Repeat) }
+    case 'BinaryExpression':
+      if (node.operator === '->') return { ...node, left: map(node.left), right: map(node.right) }
+      return transform(node)
+    default:
+      return isPitchLeaf(node) ? transform(node) : node
+  }
+}
+
+function scalarOperand(
+  input: ScoreExpression,
+  context: PitchContext,
+  environment: LexicalEnvironment | undefined,
+): BroadcastScalar | undefined {
+  let expression: Expression = input
+  let articulation = new Fraction(1)
+  const continuations: BroadcastScalar['continuations'] = []
+  for (;;) {
+    switch (expression.type) {
+      case 'Group':
+        expression = expression.expression
+        break
+      case 'PostfixExpression':
+        continuations.unshift(
+          ...expression.marks.filter((mark) => mark.type === 'DetachedContinue'),
+        )
+        expression = expression.expression
+        break
+      case 'Sequence': {
+        let scalar: Expression | undefined
+        for (const item of expression.items) {
+          if (item.type === 'Directive') {
+            const directive = resolveDirective(item, context, environment).directive
+            if (directive?.kind !== 'articulation') return
+            articulation = directive.ratio
+          } else {
+            if (scalar) return
+            scalar = item
+          }
+        }
+        if (!scalar) return
+        expression = scalar
+        break
+      }
+      default:
+        return plainScalar(expression) ? { expression, articulation, continuations } : undefined
+    }
+  }
+}
+
+function applyBroadcastContinuations(
+  expression: ScoreExpression,
+  continuations: BroadcastScalar['continuations'],
+): ScoreExpression {
+  if (!continuations.length) return expression
+  if (expression.type === 'PostfixExpression') {
+    const count = expression.marks.filter((mark) => mark.type === 'DetachedContinue').length
+    return count >= continuations.length
+      ? expression
+      : { ...expression, marks: [...expression.marks, ...continuations.slice(count)] }
+  }
+  return {
+    type: 'PostfixExpression',
+    expression,
+    marks: continuations,
+    location: expression.location,
+  }
+}
+
+function combineConstructions(
+  left: ScoreExpression,
+  right: ScoreExpression,
+  combine: (left: ScoreExpression, right: ScoreExpression) => ScoreExpression,
+): ScoreExpression | undefined {
+  if (left.type !== right.type) return
+  const pair = (a: ScoreExpression, b: ScoreExpression) =>
+    combineConstructions(a, b, combine) ??
+    (plainScalar(a) && plainScalar(b) ? combine(a, b) : undefined)
+  if (left.type === 'Group' && right.type === 'Group') {
+    const expression = pair(left.expression, right.expression)
+    return expression && { ...left, expression }
+  }
+  if (left.type === 'NormalizeToSlot' && right.type === 'NormalizeToSlot') {
+    if (!left.expression || !right.expression) return
+    const expression = pair(left.expression, right.expression)
+    return expression && { ...left, expression }
+  }
+  if (
+    (left.type === 'Sequence' && right.type === 'Sequence') ||
+    (left.type === 'Parallel' && right.type === 'Parallel')
+  ) {
+    const a = left.type === 'Sequence' ? left.items : left.branches
+    const b = right.type === 'Sequence' ? right.items : right.branches
+    if (a.length !== b.length) return
+    const items = a.map((item, index) => pair(item, b[index]!))
+    if (!items.every((item) => item !== undefined)) return
+    return left.type === 'Sequence' ? { ...left, items } : { ...left, branches: items }
+  }
+}
+
+function broadcastScalarOperation(
+  node: ScoreExpression,
+  context: PitchContext,
+  environment?: LexicalEnvironment,
+): ScoreExpression | undefined {
+  const lower = (operand: Expression) => broadcastScalarOperation(operand, context, environment)
+  if (node.type === 'Group' || node.type === 'PostfixExpression') {
+    const expression = lower(node.expression)
+    return expression && { ...node, expression }
+  }
+  if (node.type === 'UnaryExpression' || node.type === 'PitchModifierExpression') {
+    const operand = lower(node.operand)
+    if (operand) return { ...node, operand }
+    if (isScoreConstruction(node.operand))
+      return mapScoreConstruction(node.operand, (leaf) => ({
+        ...node,
+        operand: leaf,
+        expansionPath: leaf.expansionPath ?? node.expansionPath,
+      }))
+    return
+  }
+  if (node.type !== 'BinaryExpression' || node.operator === '->' || isComparison(node.operator))
+    return
+  const left = lower(node.left)
+  if (left) return { ...node, left }
+  const right = lower(node.right)
+  if (right) return { ...node, right }
+  const combined = combineConstructions(node.left, node.right, (a, b) => ({
+    ...node,
+    left: a,
+    right: b,
+    expansionPath: a.expansionPath?.length ? a.expansionPath : b.expansionPath,
+  }))
+  if (combined) return combined
+
+  for (const scalarSide of ['left', 'right'] as const) {
+    const scoreSide = scalarSide === 'left' ? 'right' : 'left'
+    if (!isScoreConstruction(node[scoreSide])) continue
+    const scalar = scalarOperand(node[scalarSide], context, environment)
+    if (!scalar) continue
+    const mapped = mapScoreConstruction(node[scoreSide], (leaf) => ({
+      ...node,
+      [scalarSide]: scalar.expression,
+      [scoreSide]: leaf,
+      expansionPath: leaf.expansionPath ?? node.expansionPath,
+      broadcastArticulation: scalar.articulation,
+    }))
+    return applyBroadcastContinuations(mapped, scalar.continuations)
+  }
+}
+
+function expandEnumeratedChord(
+  node: ScoreExpression,
+  context: PitchContext,
+  environment?: LexicalEnvironment,
+): { expressions: ScoreExpression[]; diagnostics: Diagnostic[] } {
+  if (node.type === 'EnumeratedChord')
+    return expandHarmonicSegment(node, (expression) =>
+      evaluateExpression(expression, context, environment),
+    )
+  if (
+    node.type === 'UnaryExpression' ||
+    node.type === 'PitchModifierExpression' ||
+    node.type === 'Group'
+  ) {
+    const operand = node.type === 'Group' ? node.expression : node.operand
+    const expanded = expandEnumeratedChord(operand, context, environment)
+    if (expanded.expressions.length !== 1 || expanded.expressions[0] !== operand)
+      return {
+        ...expanded,
+        expressions: expanded.expressions.map((expression) =>
+          node.type === 'Group' ? { ...node, expression } : { ...node, operand: expression },
+        ),
+      }
+  }
+  if (node.type === 'BinaryExpression' && !isComparison(node.operator)) {
+    const left = expandEnumeratedChord(node.left, context, environment)
+    const right = expandEnumeratedChord(node.right, context, environment)
+    if (
+      left.expressions.length !== 1 ||
+      left.expressions[0] !== node.left ||
+      right.expressions.length !== 1 ||
+      right.expressions[0] !== node.right
+    ) {
+      const diagnostics = [...left.diagnostics, ...right.diagnostics]
+      const expressions = left.expressions.flatMap((a) =>
+        right.expressions.map((b) => ({ ...node, left: a, right: b })),
+      )
+      return { expressions, diagnostics }
+    }
+  }
+  return { expressions: [node], diagnostics: [] }
+}
+
 function repeatCount(node: Extract<Expression, { type: 'Repeat' }>): number | undefined {
   let count: bigint
   try {
@@ -285,6 +552,81 @@ function pad(shape: ScoreShape, duration: Fraction): ScoreShape {
   const missing = duration.sub(shape.duration)
   if (!missing.n) return shape
   return sequence([shape, generatedRest(missing)], shape.origins)
+}
+
+function scaleShape(shape: ScoreShape, factor: Fraction): ScoreShape {
+  const duration = shape.duration.mul(factor)
+  if (shape.kind === 'sequence')
+    return {
+      ...shape,
+      duration,
+      children: shape.children.map((child) => scaleShape(child, factor)),
+    }
+  if (shape.kind === 'parallel')
+    return {
+      ...shape,
+      duration,
+      branches: shape.branches.map((branch) => scaleShape(branch, factor)),
+    }
+  return { ...shape, duration }
+}
+
+/** Change the written end while retaining all earlier boundaries and zero-time marks. */
+function trimShape(shape: ScoreShape, duration: Fraction): ScoreShape {
+  if (duration.compare(0) < 0 || duration.compare(shape.duration) > 0)
+    throw new RangeError('Invalid trimmed duration.')
+  const cap = (child: ScoreShape, available: Fraction) =>
+    trimShape(child, child.duration.compare(available) <= 0 ? child.duration : available)
+  if (shape.kind === 'parallel')
+    return { ...shape, duration, branches: shape.branches.map((branch) => cap(branch, duration)) }
+  if (shape.kind === 'sequence') {
+    let available = duration
+    const children = shape.children.map((child) => {
+      const trimmed = cap(child, available)
+      available = available.sub(trimmed.duration)
+      return trimmed
+    })
+    return { ...shape, duration, children }
+  }
+  return { ...shape, duration }
+}
+
+function resizeShape(shape: ScoreShape, duration: Fraction): ScoreShape {
+  if (shape.duration.n) return scaleShape(shape, duration.div(shape.duration))
+  if (shape.kind === 'attack') return { ...shape, duration }
+  if (shape.kind === 'parallel')
+    return {
+      ...shape,
+      duration,
+      branches: shape.branches.map((branch) => resizeShape(branch, duration)),
+    }
+  if (shape.kind === 'sequence') {
+    const first = shape.children.findIndex((child) => attacks(child).length > 0)
+    return {
+      ...shape,
+      duration,
+      children: shape.children.map((child, index) =>
+        index === first ? resizeShape(child, duration) : child,
+      ),
+    }
+  }
+  return shape
+}
+
+function mapAttacks(
+  shape: ScoreShape,
+  transform: (attack: AttackShape) => AttackShape,
+): ScoreShape {
+  switch (shape.kind) {
+    case 'attack':
+      return transform(shape)
+    case 'sequence':
+      return { ...shape, children: shape.children.map((child) => mapAttacks(child, transform)) }
+    case 'parallel':
+      return { ...shape, branches: shape.branches.map((branch) => mapAttacks(branch, transform)) }
+    default:
+      return shape
+  }
 }
 
 type PitchTree =
