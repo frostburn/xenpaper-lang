@@ -92,15 +92,20 @@ describe('beat event expansion', () => {
     expect(result.events).toHaveLength(2)
   })
 
-  it.each(['false @and 1::10001', 'true @or 1::10001'])(
-    'short-circuits %s before expanding its score operands',
-    (logic) => {
-      const expression = `1/1 + (${logic})`
-      const result = audibleResult(expression)
-      expect(result.events).toHaveLength(1)
-      expect(result).toEqual(audibleResult(`let kept <- ${expression} $ kept`))
-    },
-  )
+  it.each([
+    ['1/1 + (0/1 @and 1::10001)', '1/1'],
+    ['1/1 + (3/2 @or 1::10001)', '5/2'],
+    ['4::6 @or 1::10001', '4::6'],
+    ['false @or (C . D=)', 'C . D='],
+    ['(true @and [1/1 3/2]) * [1/1 4/3]', '[1/1 2/1]'],
+    ['(1/1, 4/3) * (false @or (1/1, 3/2))', '(1/1, 2/1)'],
+    [
+      'fn choose(flag: boolean) { ret flag @and [C E] @or [D F] } $ choose(true) choose(false)',
+      '[C E] [D F]',
+    ],
+  ])('plays the value selected by a logical operator in %s', (source, expected) => {
+    expect(audibleResult(source, false)).toEqual(audibleResult(expected, false))
+  })
 
   it.each([
     ['C al [D E]', 'C'],
@@ -116,7 +121,7 @@ describe('beat event expansion', () => {
     expect(audibleResult(source, false)).toEqual(audibleResult(expected, false))
   })
 
-  it.each(['niente al 1::10001', '1::10001 al C'])(
+  it.each(['niente al 1::10001', '1::10001 al C', 'true @and 1::10001', 'false @or 1::10001'])(
     'reports expansion limits for the evaluated operand in %s',
     (source) => {
       const result = expandToBeatEvents(parse(source))
