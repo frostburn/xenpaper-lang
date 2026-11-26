@@ -1781,42 +1781,48 @@ function evaluateScorePass(
           continue
         }
         if (item.type === 'PitchContextChange') {
+          const diagnostics: Diagnostic[] = []
           try {
-            const previousContext = activeVisitor.scope.context
+            const { context: previousContext, environment } = activeVisitor.scope
             const changedContext = applyPitchContextChange(
               item,
               previousContext,
-              activeVisitor.scope.environment,
+              environment,
+              diagnostics,
             )
             activeVisitor = changeVisitor(activeVisitor, (context) => ({
               ...context,
-              pitchContext: applyPitchContextChange(
-                item,
-                context.pitchContext,
-                context.lexicalEnvironment,
-              ),
+              // A later timed base needs its own tuning, without replaying
+              // the effects of executing this declaration in the score.
+              pitchContext:
+                context.pitchContext === previousContext &&
+                context.lexicalEnvironment === environment
+                  ? changedContext
+                  : capturePrints(() =>
+                      applyPitchContextChange(
+                        item,
+                        context.pitchContext,
+                        context.lexicalEnvironment,
+                      ),
+                    ).result,
             }))
             results.push({
               shape: withVisitorContext(
                 contextShape(item, changedContext, previousContext),
                 activeVisitor,
               ),
-              diagnostics: [],
+              diagnostics,
             })
           } catch (error) {
-            results.push({
-              diagnostics:
-                error instanceof EvaluationError
-                  ? error.diagnostics
-                  : [
-                      {
-                        code: 'XP_CONTEXT',
-                        severity: 'error',
-                        message: error instanceof Error ? error.message : 'Invalid pitch context.',
-                        locations: [item.location],
-                      },
-                    ],
-            })
+            if (error instanceof EvaluationError) diagnostics.push(...error.diagnostics)
+            else
+              diagnostics.push({
+                code: 'XP_CONTEXT',
+                severity: 'error',
+                message: error instanceof Error ? error.message : 'Invalid pitch context.',
+                locations: [item.location],
+              })
+            results.push({ diagnostics })
           }
           continue
         }
@@ -2466,15 +2472,17 @@ function evaluateScorePass(
     }
 
     if (current.type === 'PitchContextChange') {
+      const diagnostics: Diagnostic[] = []
       try {
-        const changed = applyPitchContextChange(current, context, environment)
+        const changed = applyPitchContextChange(current, context, environment, diagnostics)
         return {
           shape: withOccurrence(contextShape(current, changed, context), visitor),
-          diagnostics: [],
+          diagnostics,
         }
       } catch (error) {
-        if (error instanceof EvaluationError) return { diagnostics: error.diagnostics }
-        return { shape: withOccurrence(contextAnnotation(current), visitor), diagnostics: [] }
+        if (error instanceof EvaluationError)
+          return { diagnostics: [...diagnostics, ...error.diagnostics] }
+        return { shape: withOccurrence(contextAnnotation(current), visitor), diagnostics }
       }
     }
     let selected = capturePrints(() =>

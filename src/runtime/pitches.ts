@@ -20,6 +20,7 @@ import {
   evaluateFunctionCall,
   type ExpressionEvaluationResult,
 } from './expressions.js'
+import { capturePrints } from './printing.js'
 import type {
   AbsolutePitchValue,
   IntervalSpelling,
@@ -301,11 +302,12 @@ function asContext(input: PrimeMapping | PitchContext): PitchContext {
   return 'rootPitch' in input ? input : createPitchContext(input)
 }
 
-/** Apply the stateful subset of a pitch-context block to an immutable context. */
+/** Apply pitch-context changes, optionally collecting diagnostics from their scale expressions. */
 export function applyPitchContextChange(
   node: PitchContextChange,
   input: PitchContext = DEFAULT_PITCH_CONTEXT,
   environment?: LexicalEnvironment,
+  diagnostics?: Diagnostic[],
 ): PitchContext {
   let context = input
   for (const statement of node.statements) {
@@ -359,9 +361,27 @@ export function applyPitchContextChange(
       type ExpandedDegrees = {
         values: DegreeExpression[]
         iterable: boolean
+        diagnostics: readonly Diagnostic[]
       }
       const evaluateDegree = ({ expression, environment, evaluated }: DegreeExpression) =>
         evaluated ?? evaluateExpression(expression, context, environment)
+      // Scalar arithmetic falls back to ordinary expression evaluation. Only
+      // retain output from the expansion when it supplies the scale degrees.
+      const probeExpansion = (expand: () => ExpandedDegrees | undefined) => {
+        const { result, flush } = capturePrints(() => {
+          try {
+            return { expanded: expand() }
+          } catch (error) {
+            return { error }
+          }
+        })
+        if ('error' in result) {
+          flush()
+          throw result.error
+        }
+        if (result.expanded) flush()
+        return result.expanded
+      }
       const expandDegreeExpression = (
         expression: Expression,
         expressionEnvironment = environment,
@@ -374,16 +394,14 @@ export function applyPitchContextChange(
             (operand, scope, protectedReturn) => {
               try {
                 const expanded = expandDegreeExpression(operand, scope)
-                if (!protectedReturn) return { ...expanded, diagnostics: [] }
-                const values = expanded.values.map((value) => ({
-                  ...value,
-                  evaluated: evaluateDegree(value),
-                }))
-                return {
-                  ...expanded,
-                  values,
-                  diagnostics: values.flatMap(({ evaluated }) => evaluated.diagnostics),
-                }
+                if (!protectedReturn) return expanded
+                const diagnostics = [...expanded.diagnostics]
+                const values = expanded.values.map((value) => {
+                  const evaluated = evaluateDegree(value)
+                  if (!value.evaluated) diagnostics.push(...evaluated.diagnostics)
+                  return { ...value, evaluated }
+                })
+                return { ...expanded, values, diagnostics }
               } catch (error) {
                 if (error instanceof EvaluationError) return { diagnostics: error.diagnostics }
                 if (protectedReturn && error instanceof TypeError)
@@ -407,41 +425,46 @@ export function applyPitchContextChange(
             return {
               values: [{ expression, environment: expressionEnvironment }],
               iterable: false,
+              diagnostics: [],
             }
           if (!('values' in returned)) throw new EvaluationError(returned.diagnostics)
           return returned
         }
         if (expression.type === 'Group' || expression.type === 'NormalizeToSlot') {
-          if (!expression.expression) return { values: [], iterable: true }
+          if (!expression.expression) return { values: [], iterable: true, diagnostics: [] }
           return expandDegreeExpression(expression.expression, expressionEnvironment)
         }
         if (expression.type === 'Sequence' || expression.type === 'Parallel') {
           const items = expression.type === 'Sequence' ? expression.items : expression.branches
+          const children = items.map((item) => expandDegreeExpression(item, expressionEnvironment))
           return {
-            values: items.flatMap(
-              (item) => expandDegreeExpression(item, expressionEnvironment).values,
-            ),
+            values: children.flatMap((child) => child.values),
             iterable: true,
+            diagnostics: children.flatMap((child) => child.diagnostics),
           }
         }
         if (
           expression.type === 'UnaryExpression' ||
           expression.type === 'PitchModifierExpression'
         ) {
-          const expanded = expandDegreeExpression(expression.operand, expressionEnvironment)
-          if (expanded.iterable)
+          const expanded = probeExpansion(() => {
+            const operand = expandDegreeExpression(expression.operand, expressionEnvironment)
+            if (!operand.iterable) return
             return {
-              values: expanded.values.map(({ expression: operand, environment }) => ({
+              ...operand,
+              values: operand.values.map(({ expression: operand, environment }) => ({
                 expression: { ...expression, operand },
                 environment,
               })),
-              iterable: true,
             }
+          })
+          if (expanded) return expanded
         }
         if (expression.type === 'BinaryExpression') {
-          const left = expandDegreeExpression(expression.left, expressionEnvironment)
-          const right = expandDegreeExpression(expression.right, expressionEnvironment)
-          if (left.iterable || right.iterable) {
+          const expanded = probeExpansion(() => {
+            const left = expandDegreeExpression(expression.left, expressionEnvironment)
+            const right = expandDegreeExpression(expression.right, expressionEnvironment)
+            if (!left.iterable && !right.iterable) return
             if (left.iterable && right.iterable && left.values.length !== right.values.length)
               throw new TypeError('Iterable scale operands must have the same length.')
             const length = left.iterable ? left.values.length : right.values.length
@@ -455,24 +478,28 @@ export function applyPitchContextChange(
                 }
               }),
               iterable: true,
+              diagnostics: [...left.diagnostics, ...right.diagnostics],
             }
-          }
+          })
+          if (expanded) return expanded
         }
         if (expression.type !== 'EnumeratedChord')
           return {
             values: [{ expression, environment: expressionEnvironment }],
             iterable: false,
+            diagnostics: [],
           }
 
         const enumerated = expression
+        let endpointDiagnostics: readonly Diagnostic[] = []
         let enumerands = enumerated.enumerands
         if (!enumerands) {
           const evaluated = [enumerated.first, enumerated.rangeEnd!].map((endpoint) =>
             evaluateExpression(endpoint, context, expressionEnvironment),
           )
-          const diagnostics = evaluated.flatMap((result) => result.diagnostics)
-          if (diagnostics.some(({ severity }) => severity === 'error'))
-            throw new EvaluationError(diagnostics)
+          endpointDiagnostics = evaluated.flatMap((result) => result.diagnostics)
+          if (endpointDiagnostics.some(({ severity }) => severity === 'error'))
+            throw new EvaluationError(endpointDiagnostics)
           const endpoints = evaluated.map((result) => {
             if (!('value' in result) || result.value.kind !== 'scalar') return undefined
             const exact = result.value.value.exactRational()
@@ -517,11 +544,20 @@ export function applyPitchContextChange(
             environment: expressionEnvironment,
           })),
           iterable: true,
+          diagnostics: endpointDiagnostics,
         }
       }
-      const values = statement.values.flatMap((value) => expandDegreeExpression(value).values)
+      const values = statement.values.flatMap((value) => {
+        const expanded = expandDegreeExpression(value)
+        diagnostics?.push(...expanded.diagnostics)
+        return expanded.values
+      })
       const evaluatedDegrees = values.flatMap((value) => {
         const evaluated = evaluateDegree(value)
+        if (!value.evaluated)
+          diagnostics?.push(
+            ...evaluated.diagnostics.filter(({ severity }) => severity === 'warning'),
+          )
         if (!('value' in evaluated))
           throw new TypeError('Degree assignments require pitch intervals.')
         return evaluated.value.kind === 'container' ? evaluated.value.values : [evaluated.value]

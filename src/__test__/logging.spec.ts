@@ -71,6 +71,38 @@ describe('print and warn', () => {
     expect(log.mock.calls).toEqual([['slot'], ['note']])
   })
 
+  it.each(['tuning()', 'tuning() * 1/1', '4/3 tuning() 2/1'])(
+    'reports output once from a scale defined with %s',
+    (scale) => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const result = expandToBeatEvents(
+        parse(`fn tuning() { print(«scale») warn(«check tuning») ret 3/2 } {scale <- ${scale}} 1`),
+      )
+      expect(result).toHaveProperty('score')
+      expect(log.mock.calls).toEqual([['scale']])
+      expect(result.diagnostics).toMatchObject([
+        { code: 'XP_WARN', severity: 'warning', message: 'check tuning' },
+      ])
+    },
+  )
+
+  it('reapplies a scale to timed tuning changes while reporting its output once', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { initialization } = evaluateInitialization(parse('. {19edo}'), { allowDuration: true })
+    const result = expandToBeatEvents(
+      parse('fn tuning() { print(«scale») warn(«check tuning») ret ~3/2 } {scale <- tuning()} 1 1'),
+      { initialization },
+    )
+    if (!('score' in result)) throw new Error('Expected a score.')
+    const notes = result.score.events.filter((event) => event.kind === 'note')
+    expect(notes.map(({ pitch }) => pitch.value.valueOf())).toEqual([
+      expect.closeTo(1200 * Math.log2(3 / 2)),
+      expect.closeTo((11 * 1200) / 19),
+    ])
+    expect(log.mock.calls).toEqual([['scale']])
+    expect(result.diagnostics).toMatchObject([{ code: 'XP_WARN', message: 'check tuning' }])
+  })
+
   it.each(['warn()', 'warn(1/1)', 'warn(«a», «b»)'])(
     'requires a single string argument in %s',
     (source) => {
