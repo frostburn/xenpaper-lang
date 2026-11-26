@@ -2,33 +2,36 @@ import { describe, expect, it } from 'vitest'
 import { parse, tryParse } from '../parser.js'
 
 describe('parser results for tools', () => {
-  it('parses a flat comma binding pattern with source locations for each target', () => {
-    const source = 'let (foo, bar) <- (0/1, 1/1)\n(foo, bar) <- (bar, foo + bar)'
-    const [sequence] = parse(source).body
-    if (sequence?.type !== 'Sequence') throw new Error('Expected a sequence.')
-    expect(sequence.items).toMatchObject([
-      {
-        type: 'DestructuringDeclaration',
-        pattern: { type: 'BindingPattern', names: [{ name: 'foo' }, { name: 'bar' }] },
-      },
-      {
-        type: 'DestructuringAssignment',
-        pattern: { type: 'BindingPattern', names: [{ name: 'foo' }, { name: 'bar' }] },
-      },
-    ])
-    for (const declaration of sequence.items) {
-      if (
-        declaration.type !== 'DestructuringDeclaration' &&
-        declaration.type !== 'DestructuringAssignment'
-      )
-        throw new Error('Expected a destructuring statement.')
-      expect(
-        declaration.pattern.names.map(({ location }) =>
-          source.slice(location.start.offset, location.end.offset),
-        ),
-      ).toEqual(['foo', 'bar'])
-    }
-  })
+  it.each(['(foo, bar)', '[foo, bar]', '(foo bar)', '[foo bar]'])(
+    'parses %s as a flat binding pattern with source locations',
+    (pattern) => {
+      const source = `let ${pattern} <- (0/1, 1/1)\n${pattern} <- (bar, foo + bar)`
+      const [sequence] = parse(source).body
+      if (sequence?.type !== 'Sequence') throw new Error('Expected a sequence.')
+      expect(sequence.items).toMatchObject([
+        {
+          type: 'DestructuringDeclaration',
+          pattern: { type: 'BindingPattern', names: [{ name: 'foo' }, { name: 'bar' }] },
+        },
+        {
+          type: 'DestructuringAssignment',
+          pattern: { type: 'BindingPattern', names: [{ name: 'foo' }, { name: 'bar' }] },
+        },
+      ])
+      for (const declaration of sequence.items) {
+        if (
+          declaration.type !== 'DestructuringDeclaration' &&
+          declaration.type !== 'DestructuringAssignment'
+        )
+          throw new Error('Expected a destructuring statement.')
+        expect(
+          declaration.pattern.names.map(({ location }) =>
+            source.slice(location.start.offset, location.end.offset),
+          ),
+        ).toEqual(['foo', 'bar'])
+      }
+    },
+  )
 
   it('keeps adjacent score items and single assignments distinct from a binding pattern', () => {
     const sequence = parse('foo bar <- D').body[0]
@@ -45,6 +48,36 @@ describe('parser results for tools', () => {
       items: [{ type: 'Identifier', name: 'foo' }, { type: 'DestructuringAssignment' }],
     })
   })
+
+  it('separates a bracketed assignment pattern from an attached index', () => {
+    expect(parse('notes[foo mod bar]').body[0]).toMatchObject({
+      type: 'IndexExpression',
+      index: { type: 'BinaryExpression', operator: 'mod' },
+    })
+    expect(parse('[foo bar]').body[0]).toMatchObject({
+      type: 'NormalizeToSlot',
+      expression: { type: 'Sequence' },
+    })
+    expect(parse('let chosen <- notes[0][foo mod bar] <- (C, D, E)').body[0]).toMatchObject({
+      type: 'Sequence',
+      items: [
+        { type: 'VariableDeclaration', value: { type: 'IndexExpression', index: { value: '0' } } },
+        {
+          type: 'DestructuringAssignment',
+          pattern: { names: [{ name: 'foo' }, { name: 'mod' }, { name: 'bar' }] },
+        },
+      ],
+    })
+  })
+
+  it.each(['(foo)', '[foo]', '[foo,]'])(
+    'requires the singleton pattern (foo,) in place of %s',
+    (pattern) => {
+      expect(tryParse(`let ${pattern} <- (C,)`)).toMatchObject({
+        diagnostics: [{ code: 'XP_SYNTAX' }],
+      })
+    },
+  )
 
   it('returns the same program, comments, and source identity as parse', () => {
     const file = { name: 'clip.xp', owner: {} }

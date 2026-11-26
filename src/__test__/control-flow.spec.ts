@@ -27,16 +27,24 @@ for(index of range(6)) {
     expect(score(source)).toEqual(score('1/1 1/1 2/1 3/1 5/1 8/1'))
   })
 
-  it('uses positional patterns in function bodies and preserves the paired assignment there', () => {
-    const source = `
+  it.each(['(foo, bar)', '[foo, bar]', '(foo bar)', '[foo bar]'])(
+    'applies the same positional assignment for %s in a function',
+    (pattern) => {
+      const source = `
 fn fibonacci(count: integer) {
-  let (foo, bar) <- [0/1 1/1]
-  for(index of range(count)) { (foo, bar) <- (bar, foo + bar) }
+  let ${pattern} <- [0/1 1/1]
+  for(index of range(count)) { ${pattern} <- (bar, foo + bar) }
   ret foo
 }
 fibonacci(7)
 `
-    expect(score(source)).toEqual(score('13/1'))
+      expect(score(source)).toEqual(score('13/1'))
+    },
+  )
+
+  it('preserves each selected child’s rhythm when the pattern uses brackets', () => {
+    const source = 'let [foo, bar] <- [(C D), [E F]] $ [foo bar] <- (bar foo) $ foo bar'
+    expect(score(source)).toEqual(score('[E F] C D'))
   })
 
   it('updates bindings across frames while retaining lexical shadows', () => {

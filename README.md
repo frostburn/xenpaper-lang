@@ -479,9 +479,10 @@ foo bar
 
 Both scores play `1 2 3`.
 
-Use a parenthesized comma pattern to bind a container's top-level elements.
-Each name must be distinct, and the container must have exactly as many
-elements as the pattern has names. Write a singleton pattern as `(name,)`.
+The patterns `(foo, bar)`, `[foo, bar]`, `(foo bar)`, and `[foo bar]` bind a
+container's top-level elements in order. Each name must be distinct, and
+the container must have exactly as many elements as the pattern has names.
+Write a singleton pattern as `(name,)`.
 The elements keep their own rhythm and nesting.
 
 With `<-` on its own, every name in the pattern must already be assignable.
