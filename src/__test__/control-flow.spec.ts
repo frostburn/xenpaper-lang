@@ -15,6 +15,85 @@ function score(source: string) {
   )
 }
 
+describe('container bindings', () => {
+  it('plays successive Fibonacci ratios using the previous pair in each iteration', () => {
+    const source = `
+let (foo, bar) <- (0/1, 1/1)
+for(index of range(6)) {
+  bar
+  (foo, bar) <- (bar, foo + bar)
+}
+`
+    expect(score(source)).toEqual(score('1/1 1/1 2/1 3/1 5/1 8/1'))
+  })
+
+  it('uses positional patterns in function bodies and preserves the paired assignment there', () => {
+    const source = `
+fn fibonacci(count: integer) {
+  let (foo, bar) <- [0/1 1/1]
+  for(index of range(count)) { (foo, bar) <- (bar, foo + bar) }
+  ret foo
+}
+fibonacci(7)
+`
+    expect(score(source)).toEqual(score('13/1'))
+  })
+
+  it('updates bindings across frames while retaining lexical shadows', () => {
+    const source = `
+let foo <- C
+let bar <- D
+if(true) {
+  let bar <- E
+  (foo, bar) <- (bar, foo)
+  bar
+}
+foo bar
+`
+    expect(score(source)).toEqual(score('C E D'))
+  })
+
+  it('keeps selected child containers intact and accepts singleton comma patterns', () => {
+    const source = 'let (lead,) <- ([(C D) E],) $ lead'
+    expect(score(source)).toEqual(score('[(C D) E]'))
+  })
+
+  it('keeps the original bindings if the score handler catches an invalid target', () => {
+    const source = `
+let (foo, bar) <- (C, D)
+try { (foo, absent) <- (E, F) } catch { foo }
+(foo, bar) <- (bar, foo)
+foo bar
+`
+    expect(score(source)).toEqual(score('C D C'))
+  })
+
+  it('rolls back each successful target if a later function statement throws', () => {
+    const source = `
+fn original(outer) {
+  let inner <- C
+  try { (outer, inner) <- (inner, outer) $ throw(«undo») }
+  catch { let ignored <- true }
+  ret outer inner
+}
+original(D)
+`
+    expect(score(source)).toEqual(score('D C'))
+  })
+
+  it.each([
+    ['let (foo, bar) <- C', 'A binding pattern requires a container on the right-hand side.'],
+    ['let (foo, bar) <- ()', 'Binding pattern expects 2 elements, but received 0.'],
+    ['let (foo, bar) <- [C D E]', 'Binding pattern expects 2 elements, but received 3.'],
+    ['let (foo, foo) <- (C, D)', 'Duplicate binding name foo.'],
+    ['let foo <- C $ (foo, foo) <- (D, E)', 'Duplicate binding name foo.'],
+  ])('reports invalid binding patterns in %s', (source, message) => {
+    expect(expandToBeatEvents(parse(source)).diagnostics).toMatchObject([
+      { code: 'XP_BINDING_PATTERN', message },
+    ])
+  })
+})
+
 describe('comparison expressions', () => {
   it('keeps ordinary pitch spellings and the MOS accidental beside comparison operators', () => {
     expect(parse('eq @eq e').body[0]).toMatchObject({

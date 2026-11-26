@@ -479,6 +479,24 @@ foo bar
 
 Both scores play `1 2 3`.
 
+Use a parenthesized comma pattern to bind a container's top-level elements.
+Each name must be distinct, and the container must have exactly as many
+elements as the pattern has names. Write a singleton pattern as `(name,)`.
+The elements keep their own rhythm and nesting.
+
+With `<-` on its own, every name in the pattern must already be assignable.
+The right-hand side is evaluated once using the previous bindings, and all
+targets are updated together. A failed pattern leaves the bindings intact.
+This works in scores and in function bodies.
+
+```text
+let (foo, bar) <- (0/1, 1/1)
+for(index of range(8)) {
+  print(foo)
+  (foo, bar) <- (bar, foo + bar)
+}
+```
+
 An implicit repeat starts after the last `$` or `||` in its scope.
 `C $ D :|` plays `C D D`. An explicit repeat can span a statement boundary,
 so `|: C $ D :|` plays `C D C D`.

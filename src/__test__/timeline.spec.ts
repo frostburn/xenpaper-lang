@@ -33,6 +33,16 @@ function notes(source: string, initialization: ScoreInitialization, offset?: Fra
 }
 
 describe('global grid context', () => {
+  it('publishes both targets of a timed destructuring assignment at the same beat', () => {
+    const initialization = initialize('let (foo, bar) <- (C, D) $ . $ (foo, bar) <- (bar, foo)')
+    const labels = (offset: Fraction) =>
+      notes('[foo bar]', initialization, offset).map(
+        ({ pitch }) => pitch.kind === 'absolutePitch' && pitch.spelling.nominal,
+      )
+    expect(labels(new Fraction(0))).toEqual(['C', 'D'])
+    expect(labels(new Fraction(1))).toEqual(['D', 'C'])
+  })
+
   it('applies groove changes from layered timelines at their absolute beats', () => {
     const parent = initialize('. @groove([C= C]) ...')
     const layer = evaluateInitialization(parse('@groove([C C=]) ....'), {

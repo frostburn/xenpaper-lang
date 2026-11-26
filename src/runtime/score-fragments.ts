@@ -6,6 +6,8 @@ const scoreForms = new Set<Expression['type']>([
   'Barline',
   'BarRest',
   'BindingAssignment',
+  'DestructuringAssignment',
+  'DestructuringDeclaration',
   'DetachedContinue',
   'Directive',
   'DrumSampleLiteral',

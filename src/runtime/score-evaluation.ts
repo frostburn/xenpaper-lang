@@ -4,6 +4,7 @@ import type { Diagnostic } from '../diagnostics.js'
 import { catchableDiagnostic, EvaluationError } from '../diagnostics.js'
 import { isPositiveRationalRatio, Value } from '../value.js'
 import {
+  evaluateBindings,
   evaluateDeclaration,
   evaluateExpression,
   evaluateThrow,
@@ -11,6 +12,7 @@ import {
   preludeEnvironment,
   evaluateFunctionCall,
   stringValue,
+  type BindingEntries,
 } from './expressions.js'
 import {
   expandRepeatsFrom,
@@ -1122,6 +1124,14 @@ function evaluateScorePass(
     }
     return updated
   }
+  const assignBindings = (environment: LexicalEnvironment | undefined, entries: BindingEntries) => {
+    let updated = environment
+    for (const [id, value] of entries) {
+      updated = assignBinding(updated, id.name, value)
+      if (!updated) return { missing: id }
+    }
+    return { environment: updated }
+  }
 
   // The timeline reads shape annotations to recover prevailing state at a
   // clip's start beat, so restore local bindings in both the shape and visitor.
@@ -1200,21 +1210,25 @@ function evaluateScorePass(
     const structure = structureContext(visitor)
     const structurePitch = structure?.pitchContext ?? context
     const structureEnvironment = structure ? structure.lexicalEnvironment : environment
-    if (current.type === 'BindingAssignment') {
-      const evaluated = evaluateExpression(current.value, structurePitch, structureEnvironment)
-      if (!('value' in evaluated)) return evaluated
-      const name = current.name.name
-      const value = evaluated.value
-      const updated = assignBinding(structureEnvironment, name, value)
-      if (!updated)
+    if (current.type === 'BindingAssignment' || current.type === 'DestructuringAssignment') {
+      const target = current.type === 'BindingAssignment' ? current.name : current.pattern
+      const evaluated = evaluateBindings(
+        target,
+        current.value,
+        structurePitch,
+        structureEnvironment,
+      )
+      if (!('entries' in evaluated)) return evaluated
+      const updated = assignBindings(structureEnvironment, evaluated.entries)
+      if (updated.missing)
         return {
           diagnostics: [
             ...evaluated.diagnostics,
             {
               code: 'XP_ASSIGNMENT',
               severity: 'error',
-              message: `Assignment requires an existing score variable named ${name}.`,
-              locations: [current.name.location],
+              message: `Assignment requires an existing score variable named ${updated.missing.name}.`,
+              locations: [updated.missing.location],
             },
           ],
         }
@@ -1222,8 +1236,8 @@ function evaluateScorePass(
         ...context,
         lexicalEnvironment:
           context.lexicalEnvironment === structureEnvironment
-            ? updated
-            : (assignBinding(context.lexicalEnvironment, name, value) ??
+            ? updated.environment
+            : (assignBindings(context.lexicalEnvironment, evaluated.entries).environment ??
               context.lexicalEnvironment),
       }))
       return withVisitor(
@@ -1754,7 +1768,11 @@ function evaluateScorePass(
           visitor.scope.offset.add(elapsed.mul(visitor.scope.timeScale)),
           item.expansionPath ?? visitor.scope.expansionPath,
         )
-        if (item.type === 'VariableDeclaration' || item.type === 'FunctionDeclaration') {
+        if (
+          item.type === 'VariableDeclaration' ||
+          item.type === 'DestructuringDeclaration' ||
+          item.type === 'FunctionDeclaration'
+        ) {
           const declarationContext =
             structureContext(activeVisitor) ?? visitorContext(activeVisitor)
           const declared = evaluateDeclaration(

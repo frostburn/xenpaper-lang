@@ -807,14 +807,14 @@ ContextPreset
     }
 
 CallExpression
-  = callee:CallName Spacing args:CallArguments {
+  = callee:CallName Spacing !(BindingPattern Spacing "<-") args:CallArguments {
       return node('CallExpression', { callee, arguments: args });
     }
 
 // Pitch-shaped function names need an attached opening parenthesis to win over
 // pitch literals without making failed call attempts consume comments as spacing.
 TightCallExpression
-  = callee:CallName args:CallArguments {
+  = callee:CallName !(BindingPattern Spacing "<-") args:CallArguments {
       return node('CallExpression', { callee, arguments: args });
     }
 
@@ -830,8 +830,21 @@ CallArguments
 // parallel branches receive child scopes. Shadowing is permitted; recursion is
 // deliberately rejected by the evaluator.
 VariableDeclaration
-  = "let" !IdentifierContinue RequiredSpacing name:LocatedIdentifier Spacing "<-" Spacing value:BindingValue {
-      return node('VariableDeclaration', { name, value });
+  = "let" !IdentifierContinue RequiredSpacing target:BindingTarget Spacing "<-" Spacing value:BindingValue {
+      return target.type === 'BindingPattern'
+        ? node('DestructuringDeclaration', { pattern: target, value })
+        : node('VariableDeclaration', { name: target, value });
+    }
+
+BindingTarget
+  = LocatedIdentifier / BindingPattern
+
+BindingPattern
+  = "(" Spacing names:LocatedIdentifier|2.., Comma| Spacing ")" {
+      return node('BindingPattern', { names });
+    }
+  / "(" Spacing name:LocatedIdentifier Comma ")" {
+      return node('BindingPattern', { names: [name] });
     }
 
 // A newline can end the binding value between score items. An expression can
@@ -847,11 +860,13 @@ InlineSpacing
 
 StatementStart
   = ("let" / "fn" / "ret" / "throw" / "try" / "if" / "for" / "while" / "break" / "continue") !IdentifierContinue
-  / LocatedIdentifier Spacing "<-"
+  / BindingTarget Spacing "<-"
 
 BindingAssignment
-  = name:LocatedIdentifier Spacing "<-" Spacing value:BindingValue {
-      return node('BindingAssignment', { name, value });
+  = target:BindingTarget Spacing "<-" Spacing value:BindingValue {
+      return target.type === 'BindingPattern'
+        ? node('DestructuringAssignment', { pattern: target, value })
+        : node('BindingAssignment', { name: target, value });
     }
 
 ThrowStatement

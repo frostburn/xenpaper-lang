@@ -34,6 +34,8 @@ export type Expression =
   | ContextPreset
   | DecimalLiteral
   | DegreeLiteral
+  | DestructuringAssignment
+  | DestructuringDeclaration
   | Directive
   | DetachedContinue
   | DrumSampleLiteral
@@ -172,6 +174,17 @@ export interface VariableDeclaration extends Node {
   value: Expression
 }
 
+export interface BindingPattern extends Node {
+  type: 'BindingPattern'
+  names: Identifier[]
+}
+
+export interface DestructuringDeclaration extends Node {
+  type: 'DestructuringDeclaration'
+  pattern: BindingPattern
+  value: Expression
+}
+
 /** A non-recursive lexical closure. The node location covers the whole declaration. */
 export interface FunctionDeclaration extends Node {
   type: 'FunctionDeclaration'
@@ -197,6 +210,12 @@ export interface CoercionAnnotation extends Node {
 export interface BindingAssignment extends Node {
   type: 'BindingAssignment'
   name: Identifier
+  value: Expression
+}
+
+export interface DestructuringAssignment extends Node {
+  type: 'DestructuringAssignment'
+  pattern: BindingPattern
   value: Expression
 }
 
