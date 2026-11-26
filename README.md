@@ -634,6 +634,25 @@ Aeolian, Phrygian, and Locrian; `major` aliases Ionian and `minor` aliases
 Aeolian. Mode names are case-insensitive, and a key without a mode remains
 Ionian.
 
+## Container indexing
+
+`notes[index]` selects one element by its zero-based integer index. Negative
+indices count from the end. To select several elements, use a container of
+indices. The result keeps the indexing container's composition, normalization,
+and nesting. Each index selects from the same source, and repeated indices
+repeat the selected element.
+
+With `let notes <- (C D E)`, `notes[(2 0 2)]` gives `(E C E)` and
+`notes[[2, 0, 2]]` gives `[E, C, E]`. Bare integers written directly in an
+index container are scalar indices. Stored indices can be written as integer
+ratios, such as `(2/1 0/1 2/1)`, or generated with `range`.
+
+A Boolean mask is a flat container of Booleans with the same length as the
+source. `true` keeps the corresponding top-level element and `false` skips it.
+The result keeps the mask's composition and normalization.
+`notes[[true, false, true]]` gives `[C, E]`. An all-false normalized mask
+produces `[]`, a silent slot.
+
 ## Strings and records
 
 Write string literals as `<<text>>` or `«text»`. Both forms accept JSON

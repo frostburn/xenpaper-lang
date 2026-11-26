@@ -32,6 +32,68 @@ describe('arithmetic expression evaluation', () => {
     ])
   })
 
+  it('gathers repeated and negative indices in the indexing container’s order', () => {
+    const selected = evaluate('[10/1, 20/1, 30/1][(-1 0 2)]')
+    if (selected.kind !== 'container') throw new Error('Expected a container.')
+    expect(selected).toMatchObject({ composition: 'sequence', grouped: true })
+    expect(selected.normalized).toBeUndefined()
+    expect(selected.values.map(({ value }) => value.valueOf())).toEqual([30, 10, 30])
+  })
+
+  it('preserves nested index shapes and keeps each selected element intact', () => {
+    const selected = evaluate('[(10/1 11/1) (20/1 21/1)][[1, (0, 1)]]')
+    expect(selected).toMatchObject({
+      kind: 'container',
+      composition: 'parallel',
+      normalized: true,
+      values: [
+        {
+          kind: 'container',
+          composition: 'sequence',
+          values: [expect.anything(), expect.anything()],
+        },
+        {
+          kind: 'container',
+          grouped: true,
+          composition: 'parallel',
+          values: [
+            { kind: 'container', composition: 'sequence' },
+            { kind: 'container', composition: 'sequence' },
+          ],
+        },
+      ],
+    })
+  })
+
+  it('uses computed Boolean flags as a mask and preserves their container’s shape', () => {
+    const selected = evaluate(
+      '[10/1 20/1 30/1][arrayMap((value) => value @gt 15, [10/1, 20/1, 30/1])]',
+    )
+    if (selected.kind !== 'container') throw new Error('Expected a container.')
+    expect(selected).toMatchObject({ composition: 'parallel', normalized: true })
+    expect(selected.values.map(({ value }) => value.valueOf())).toEqual([20, 30])
+  })
+
+  it('returns an empty slot from an all-false normalized mask', () => {
+    const selected = evaluate('[10/1, 20/1][[false, false]]')
+    expect(selected).toMatchObject({ kind: 'container', values: [], normalized: true })
+    expect(selected.kind === 'container' && selected.composition).toBeUndefined()
+  })
+
+  it.each([
+    ['[10/1 20/1][[true]]', 'Boolean mask length must match the number of container elements.'],
+    ['[10/1 20/1][[1, false]]', 'Boolean masks must be flat and contain only Booleans.'],
+    ['[10/1 20/1][[(true, false)]]', 'Boolean masks must be flat and contain only Booleans.'],
+    ['[10/1 20/1][[0 2]]', 'Container index is out of range.'],
+    ['[10/1 20/1][[-3]]', 'Container index is out of range.'],
+    ['[10/1 20/1][[1/2]]', 'Container index must be an integer.'],
+  ])('reports invalid container indexing in %s', (source, message) => {
+    const node = expression(source)
+    expect(evaluateExpression(node).diagnostics).toMatchObject([
+      { code: 'XP_TYPE_MISMATCH', message, locations: [node.location] },
+    ])
+  })
+
   it('consults a custom prime mapping only when the expression needs it', () => {
     const mapping = {
       id: 'unmapped',
