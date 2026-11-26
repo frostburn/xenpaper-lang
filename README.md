@@ -342,6 +342,18 @@ try {
 }
 ```
 
+`print(...)` sends any number of evaluated arguments to `console.log`.
+`warn(message)` takes a string and adds an `XP_WARN` diagnostic with severity
+`warning` and the source range of the call. Hosts receive it in the same
+`diagnostics` array as errors. Both calls return `()` and take no score time.
+They can be used on their own in a score or in a function body before `ret`.
+
+```text
+print(«Guide tone», 12)
+warn(«Check the tuning of this chord.»)
+C E G
+```
+
 Harmonic segments are iterable ratio containers in value expressions.
 `for(harmonic of 1::5) { ... }` visits 1 through 5, while `5::8` supplies
 `1/1`, `6/5`, `7/5`, and `8/5`. When played directly in a score, the

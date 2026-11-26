@@ -3,6 +3,7 @@ import type { CoercionAnnotation, Expression } from '../parser.js'
 import { isPositiveRationalRatio, Value } from '../value.js'
 import type { ExpressionEvaluationResult } from './expressions.js'
 import { evaluateLiteral } from './literals.js'
+import { print } from './printing.js'
 import { needsScorePlayback } from './score-fragments.js'
 import {
   callableArity,
@@ -107,6 +108,8 @@ export function evaluateBuiltinArgument(
 }
 
 const signatures = {
+  print: [],
+  warn: [null],
   pitch: ['ratio'],
   ratio: ['pitch'],
   flat: ['container'],
@@ -118,6 +121,32 @@ const signatures = {
   arrayMap: [null, 'container'],
   arrayReduce: [null, 'container', null],
 } as const
+
+function printable(item: EvaluatedLiteral): unknown {
+  switch (item.kind) {
+    case 'string':
+      return item.text
+    case 'undefined':
+      return undefined
+    case 'scalar':
+      if (item.boolean) return !item.value.isZero()
+      return item.value.dimensions.isDimensionless ? item.value.valueOf() : item.value.toString()
+    case 'absolutePitch':
+      return item.spelling.raw
+    case 'pitchOffset':
+      return item.spelling?.raw ?? item.value.toString()
+    case 'container':
+      return item.values.map(printable)
+    case 'record':
+      return Object.fromEntries([...item.fields].map(([key, value]) => [key, printable(value)]))
+    case 'scoreFragment':
+      return '<score>'
+    case 'lambda':
+      return '<lambda>'
+    case 'function':
+      return `<function ${item.definition.declaration.name.name}>`
+  }
+}
 
 function convert(item: EvaluatedLiteral, target: 'pitch' | 'ratio'): EvaluatedLiteral {
   if (item.kind === 'container')
@@ -158,18 +187,38 @@ export function evaluateBuiltinCall(
   const parameters = signatures[name]
   const count = node.arguments.length
   const min = name === 'arrayReduce' ? 2 : parameters.length
-  if (count < min || count > parameters.length) {
+  if (name !== 'print' && (count < min || count > parameters.length)) {
     const expected = min === parameters.length ? String(min) : `${min} to ${parameters.length}`
     throw new TypeError(
       `${name}() expects ${expected} argument${parameters.length === 1 ? '' : 's'}, but received ${count}.`,
     )
   }
   const supplied = node.arguments.map((argument, index) =>
-    evaluateBuiltinArgument(argument, parameters[index], environment, evaluate),
+    evaluateBuiltinArgument(
+      argument,
+      name === 'print' ? 'ratio' : parameters[index],
+      environment,
+      evaluate,
+    ),
   )
   const diagnostics = supplied.flatMap((argument) => argument.diagnostics)
   if (!supplied.every((argument) => 'value' in argument)) return { diagnostics }
   const args = supplied.map((argument) => argument.value)
+  if (name === 'print') {
+    print(args.map(printable))
+    return { value: container([]), diagnostics }
+  }
+  if (name === 'warn') {
+    const message = args[0]!
+    if (message.kind !== 'string') throw new TypeError('warn() requires a string.')
+    diagnostics.push({
+      code: 'XP_WARN',
+      severity: 'warning',
+      message: message.text,
+      locations: [node.location],
+    })
+    return { value: container([]), diagnostics }
+  }
   if (name === 'pitch' || name === 'ratio') return { value: convert(args[0]!, name), diagnostics }
   const higherOrder = name === 'arrayMap' || name === 'arrayReduce'
   function collection(index: number) {

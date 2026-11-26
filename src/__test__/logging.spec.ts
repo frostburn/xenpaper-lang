@@ -1,0 +1,82 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { expandToBeatEvents, evaluateExpression, evaluateInitialization, parse } from '../index.js'
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('print and warn', () => {
+  it('passes zero or more evaluated arguments to console.log', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(evaluateExpression(parse('print()').body[0]!)).toMatchObject({
+      value: { kind: 'container', values: [] },
+      diagnostics: [],
+    })
+    evaluateExpression(parse('print(«step», 2, true, [3/2 4/3], C)').body[0]!)
+    expect(log.mock.calls).toEqual([[], ['step', 2, true, [1.5, 4 / 3], 'C']])
+  })
+
+  it('returns a warning through the score diagnostic array without adding time', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const source = 'C warn(«check this») D'
+    const result = expandToBeatEvents(parse(source, { grammarSource: 'test.xp' }))
+    expect(result.diagnostics).toMatchObject([
+      {
+        code: 'XP_WARN',
+        severity: 'warning',
+        message: 'check this',
+        locations: [{ source: 'test.xp', start: { offset: 2 }, end: { offset: 20 } }],
+      },
+    ])
+    if (!('score' in result)) throw new Error('Expected a score.')
+    expect(result.score.duration.toFraction()).toBe('2')
+    expect(result.score.events.map((event) => event.label)).toEqual(['C', 'D'])
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it('keeps a warning alongside a later error', () => {
+    const result = expandToBeatEvents(parse('warn(«first») $ missing()'))
+    expect(result.diagnostics).toMatchObject([
+      { code: 'XP_WARN', severity: 'warning', message: 'first' },
+      { code: 'XP_UNDEFINED_NAME', severity: 'error' },
+    ])
+  })
+
+  it('runs standalone calls in functions and preserves warnings through try', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const result = expandToBeatEvents(
+      parse(`
+      fn phrase() {
+        print(«called»)
+        warn(«notice»)
+        ret C
+      }
+      try { phrase() } catch { D }
+    `),
+    )
+    expect(result.diagnostics).toMatchObject([{ code: 'XP_WARN', message: 'notice' }])
+    if (!('score' in result)) throw new Error('Expected a score.')
+    expect(result.score.events.map((event) => event.label)).toEqual(['C'])
+    expect(log.mock.calls).toEqual([['called']])
+  })
+
+  it('logs once at a settled attack in a continued slot with timed context changes', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { initialization } = evaluateInitialization(parse('. {19edo}'), { allowDuration: true })
+    expect(initialization).toBeDefined()
+    const result = expandToBeatEvents(
+      parse('[print(«slot») C (print(«note») @or D) warn(«notice»)]= '),
+      { initialization },
+    )
+    expect(result.diagnostics).toMatchObject([{ code: 'XP_WARN', message: 'notice' }])
+    expect(result).toHaveProperty('score')
+    expect(log.mock.calls).toEqual([['slot'], ['note']])
+  })
+
+  it.each(['warn()', 'warn(1/1)', 'warn(«a», «b»)'])(
+    'requires a single string argument in %s',
+    (source) => {
+      expect(evaluateExpression(parse(source).body[0]!).diagnostics).toMatchObject([
+        { code: 'XP_TYPE_MISMATCH', severity: 'error' },
+      ])
+    },
+  )
+})

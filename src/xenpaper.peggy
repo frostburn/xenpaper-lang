@@ -922,6 +922,7 @@ FunctionStatement
   = VariableDeclaration / FunctionDeclaration / BindingAssignment / ThrowStatement
   / IfBlock / ForBlock / WhileBlock / TryBlock / LoopJump
   / @ReturnStatement &(Spacing (StatementDelimiter / "}"))
+  / CallExpression
 
 ReturnStatement
   // Return binds more loosely than sequencing and parallel composition so a

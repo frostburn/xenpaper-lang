@@ -113,6 +113,9 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
         return { kind: 'jump', jump: node }
       case 'ThrowStatement':
         throw new EvaluationError(evaluateThrow(node, mapping, frame.scope))
+      case 'CallExpression':
+        read(node, frame)
+        return
       case 'IfBlock': {
         const branch = isTruthy(read(node.condition, frame)) ? node.consequent : node.alternate
         if (branch) return execute(branch, { ...frame, declarationScope: {} })

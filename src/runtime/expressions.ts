@@ -1258,7 +1258,10 @@ export function evaluateExpression(
           ...expanded.diagnostics,
           ...members.flatMap((member) => member.diagnostics),
         )
-        if (expanded.diagnostics.length || !members.every((member) => 'value' in member))
+        if (
+          expanded.diagnostics.some(({ severity }) => severity === 'error') ||
+          !members.every((member) => 'value' in member)
+        )
           return { diagnostics }
         return done({
           kind: 'container',
