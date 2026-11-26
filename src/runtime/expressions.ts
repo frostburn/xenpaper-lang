@@ -1309,15 +1309,8 @@ export function evaluateExpression(
       case 'BinaryExpression': {
         const left = read(node.left)
         if (node.operator === 'al') return done(left.kind === 'undefined' ? read(node.right) : left)
-        if (node.operator === '@and' || node.operator === '@or') {
-          const truth = isTruthy(left)
-          if (truth === (node.operator === '@or'))
-            return done(
-              booleanValue(truth, [...left.origins, { role: 'operator', location: node.location }]),
-            )
-          const right = read(node.right)
-          return done(booleanValue(isTruthy(right), operatorOrigins(left, right, node)))
-        }
+        if (node.operator === '@and' || node.operator === '@or')
+          return done(isTruthy(left) === (node.operator === '@or') ? left : read(node.right))
         const right = read(node.right)
         return done(
           isComparison(node.operator)

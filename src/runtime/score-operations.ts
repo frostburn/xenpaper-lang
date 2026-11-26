@@ -111,14 +111,16 @@ type ScoreOperation = Extract<
   { type: 'BinaryExpression' | 'UnaryExpression' | 'PitchModifierExpression' }
 >
 
+function isOperandSelection(operator: string): boolean {
+  return operator === 'al' || operator === '@and' || operator === '@or'
+}
+
 function isScoreOperation(node: Expression): node is ScoreOperation {
   if (node.type === 'UnaryExpression') return node.operator !== '@not'
   if (node.type === 'PitchModifierExpression') return true
   return (
     node.type === 'BinaryExpression' &&
-    node.operator !== 'al' &&
-    node.operator !== '@and' &&
-    node.operator !== '@or' &&
+    !isOperandSelection(node.operator) &&
     node.operator !== '->' &&
     !isComparison(node.operator)
   )
@@ -223,7 +225,7 @@ function canProduceContainer(node: Expression): boolean {
       return isScoreOperation(node) && canProduceContainer(node.operand)
     case 'BinaryExpression':
       return (
-        (node.operator === 'al' || isScoreOperation(node)) &&
+        (isOperandSelection(node.operator) || isScoreOperation(node)) &&
         (canProduceContainer(node.left) || canProduceContainer(node.right))
       )
     default:

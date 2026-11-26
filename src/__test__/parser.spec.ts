@@ -205,6 +205,15 @@ describe('lexical declarations', () => {
     })
   })
 
+  it('distinguishes the MOS pitch or from the logical operator @or', () => {
+    expect(parse('or @or J').body[0]).toMatchObject({
+      type: 'BinaryExpression',
+      operator: '@or',
+      left: { type: 'PitchLiteral', nominal: { system: 'mos', value: 'or' } },
+      right: { type: 'PitchLiteral', nominal: { system: 'mos', value: 'J' } },
+    })
+  })
+
   it('allows explicit degrees in arithmetic and under existing inflections', () => {
     expect(parse('2d * 3/1').body[0]).toMatchObject({
       type: 'BinaryExpression',

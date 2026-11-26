@@ -319,9 +319,12 @@ branches, and normalized slots need a loop of their own.
 
 Use `@not value` to negate a truth value. Parenthesize arithmetic or a
 comparison you want to negate as a unit, for example `@not (guide mod root)`.
-Use `@and` and `@or` to combine conditions. Comparisons bind before `@and`,
-and `@and` binds before `@or`. The right operand is skipped when the left
-operand determines the result. Both operators produce Booleans.
+Use `@and` and `@or` to combine conditions or select values. `x @and y`
+returns `x` if `x` is falsy and `y` otherwise. `x @or y` returns `x` if `x`
+is truthy and `y` otherwise. Both use the same truth test as `if` and
+evaluate `y` only when it supplies the result. For example, `0/1 @or 3/2`
+returns the ratio `3/2`, which can be played as a note. Comparisons bind
+before `@and`, and `@and` binds before `@or`.
 
 Use `try { ... } catch(message) { ... }` to recover from an evaluation error.
 `throw(message)` raises an error with a string message. A handler can read

@@ -356,6 +356,33 @@ describe('arithmetic expression evaluation', () => {
     expect(evaluate('3/2 if false else 5/4').value.equals(new Value(5n, 4n))).toBe(true)
   })
 
+  it.each([
+    ['0/1 @and missing()', new Value(0)],
+    ['3/2 @or missing()', new Value(3n, 2n)],
+    ['true @and 5/4', new Value(5n, 4n)],
+    ['false @or 0/1', new Value(0)],
+  ])('preserves the selected numeric value in %s', (source, expected) => {
+    const selected = evaluate(source)
+    expect(selected.kind).toBe('scalar')
+    expect(selected).not.toHaveProperty('boolean')
+    expect(selected.value.equals(expected)).toBe(true)
+  })
+
+  it('preserves the selected operand type and logical precedence', () => {
+    expect(evaluate('false @and missing()')).toMatchObject({ kind: 'scalar', boolean: true })
+    expect(evaluate('niente @and missing()').kind).toBe('undefined')
+    expect(evaluate('() @and missing()')).toMatchObject({ kind: 'container', values: [] })
+    expect(evaluate('«» @or «fallback»')).toMatchObject({ kind: 'string', text: 'fallback' })
+    expect(evaluate('«first» @or false @and missing()')).toMatchObject({
+      kind: 'string',
+      text: 'first',
+    })
+    expect(evaluate('(true @and record { name: «selected» })[«name»]')).toMatchObject({
+      kind: 'string',
+      text: 'selected',
+    })
+  })
+
   it('opens only immediate child containers in flat()', () => {
     const grouped = evaluate('(1/1, [2/1, [3/1]], 4/1)')
     const flattened = evaluate('flat((1/1, [2/1, [3/1]], 4/1))')
