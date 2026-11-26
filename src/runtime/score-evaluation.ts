@@ -27,6 +27,7 @@ import { DYNAMIC_VELOCITIES, resolveDirective } from './directives.js'
 import { Visitor, type VisitorEvaluation } from './visitor.js'
 import { contextAt } from './initialization.js'
 import { layoutNotes } from './note-layout.js'
+import { capturePrints } from './printing.js'
 import { materializeScoreContinuations, tieScoreShapes } from './ties.js'
 import { EMPTY_LEXICAL_ENVIRONMENT, extendLexicalEnvironment, isCallableValue } from './types.js'
 import {
@@ -774,8 +775,11 @@ export function evaluateScoreSemantics(
   for (let attempt = 0; attempt < 32; attempt++) {
     const attacks: TimelinePass['attacks'] = new WeakMap()
     const pass = { sources, beats, attacks, unresolvedPitch: false }
-    const result = evaluateScorePass(node, options, playback, pass)
-    if (!hasShape(result)) return result
+    const { result, flush } = capturePrints(() => evaluateScorePass(node, options, playback, pass))
+    if (!hasShape(result)) {
+      flush()
+      return result
+    }
     const placements = new Map<TimelineVisit, Fraction>()
     const layout = layoutNotes(result.shape)
     for (const note of layout.notes) {
@@ -798,11 +802,13 @@ export function evaluateScoreSemantics(
       if (contextAt(initialization, beat) !== contextAt(initialization, visit.beat)) changed = true
       if (!beat.equals(visit.offset)) next.set(visit.key, beat)
     }
-    if (!changed)
+    if (!changed) {
+      flush()
       return layout.diagnostics.length ||
         (pass.unresolvedPitch && result.diagnostics.some(({ severity }) => severity === 'error'))
         ? { diagnostics: [...result.diagnostics, ...layout.diagnostics] }
         : result
+    }
     beats = next
   }
   return {
@@ -1476,10 +1482,14 @@ function evaluateScorePass(
     const broadcast = broadcastScalarOperation(current, structurePitch, structureEnvironment)
     if (broadcast) return visitor.visit(broadcast)
     const expandedChord = expandEnumeratedChord(current, structurePitch, structureEnvironment)
-    if (expandedChord.diagnostics.length) return { diagnostics: expandedChord.diagnostics }
+    if (expandedChord.diagnostics.some(({ severity }) => severity === 'error'))
+      return { diagnostics: expandedChord.diagnostics }
     if (expandedChord.expressions.length !== 1 || expandedChord.expressions[0] !== current) {
       const results = expandedChord.expressions.map((expression) => visitor.visit(expression))
-      const diagnostics = results.flatMap((result) => result.diagnostics)
+      const diagnostics = [
+        ...expandedChord.diagnostics,
+        ...results.flatMap((result) => result.diagnostics),
+      ]
       if (!results.every(hasShape)) return { diagnostics }
       const branches = results.map((result) => result.shape)
       const duration = branches.reduce(
@@ -1771,42 +1781,48 @@ function evaluateScorePass(
           continue
         }
         if (item.type === 'PitchContextChange') {
+          const diagnostics: Diagnostic[] = []
           try {
-            const previousContext = activeVisitor.scope.context
+            const { context: previousContext, environment } = activeVisitor.scope
             const changedContext = applyPitchContextChange(
               item,
               previousContext,
-              activeVisitor.scope.environment,
+              environment,
+              diagnostics,
             )
             activeVisitor = changeVisitor(activeVisitor, (context) => ({
               ...context,
-              pitchContext: applyPitchContextChange(
-                item,
-                context.pitchContext,
-                context.lexicalEnvironment,
-              ),
+              // A later timed base needs its own tuning, without replaying
+              // the effects of executing this declaration in the score.
+              pitchContext:
+                context.pitchContext === previousContext &&
+                context.lexicalEnvironment === environment
+                  ? changedContext
+                  : capturePrints(() =>
+                      applyPitchContextChange(
+                        item,
+                        context.pitchContext,
+                        context.lexicalEnvironment,
+                      ),
+                    ).result,
             }))
             results.push({
               shape: withVisitorContext(
                 contextShape(item, changedContext, previousContext),
                 activeVisitor,
               ),
-              diagnostics: [],
+              diagnostics,
             })
           } catch (error) {
-            results.push({
-              diagnostics:
-                error instanceof EvaluationError
-                  ? error.diagnostics
-                  : [
-                      {
-                        code: 'XP_CONTEXT',
-                        severity: 'error',
-                        message: error instanceof Error ? error.message : 'Invalid pitch context.',
-                        locations: [item.location],
-                      },
-                    ],
-            })
+            if (error instanceof EvaluationError) diagnostics.push(...error.diagnostics)
+            else
+              diagnostics.push({
+                code: 'XP_CONTEXT',
+                severity: 'error',
+                message: error instanceof Error ? error.message : 'Invalid pitch context.',
+                locations: [item.location],
+              })
+            results.push({ diagnostics })
           }
           continue
         }
@@ -2300,7 +2316,8 @@ function evaluateScorePass(
       }
     }
     if (current.type === 'NormalizeToSlot') {
-      if (!current.expression) {
+      const { expression } = current
+      if (!expression) {
         return {
           shape: {
             kind: 'rest',
@@ -2321,7 +2338,10 @@ function evaluateScorePass(
           visitor.scope.normalizationBase ??
           (timeline && (contextAt(options.initialization, visitor.scope.offset) ?? base)),
       }
-      let evaluated = visitor.visit(current.expression, { ...local, layout: true })
+      const measured = capturePrints(() => visitor.visit(expression, { ...local, layout: true }))
+      let evaluated = measured.result
+      if (!('shape' in evaluated) || visitor.scope.layout || !evaluated.shape.duration.n)
+        measured.flush()
       if (!('shape' in evaluated)) return evaluated
       if (!evaluated.shape.duration.n) {
         return {
@@ -2339,7 +2359,7 @@ function evaluateScorePass(
       if (!visitor.scope.layout) {
         const tried = new Set<string>()
         for (;;) {
-          const duration = evaluated.shape.duration
+          const duration: Fraction = evaluated.shape.duration
           if (!duration.n || tried.has(duration.toFraction()) || tried.size >= 32)
             return {
               diagnostics: [
@@ -2353,13 +2373,22 @@ function evaluateScorePass(
               ],
             }
           tried.add(duration.toFraction())
-          evaluated = visitor.visit(current.expression, {
-            ...local,
-            lockedPulse: visitor.scope.base.pulse,
-            timeScale: visitor.scope.timeScale.mul(currentPulse).div(duration),
-          })
-          if (!('shape' in evaluated)) return evaluated
-          if (evaluated.shape.duration.equals(duration)) break
+          const placed = capturePrints<ScoreShapeEvaluationResult>(() =>
+            visitor.visit(expression, {
+              ...local,
+              lockedPulse: visitor.scope.base.pulse,
+              timeScale: visitor.scope.timeScale.mul(currentPulse).div(duration),
+            }),
+          )
+          evaluated = placed.result
+          if (!('shape' in evaluated)) {
+            placed.flush()
+            return evaluated
+          }
+          if (evaluated.shape.duration.equals(duration)) {
+            placed.flush()
+            break
+          }
         }
       }
       const normalizedSlots = evaluated.shape.duration.div(currentPulse)
@@ -2443,19 +2472,25 @@ function evaluateScorePass(
     }
 
     if (current.type === 'PitchContextChange') {
+      const diagnostics: Diagnostic[] = []
       try {
-        const changed = applyPitchContextChange(current, context, environment)
+        const changed = applyPitchContextChange(current, context, environment, diagnostics)
         return {
           shape: withOccurrence(contextShape(current, changed, context), visitor),
-          diagnostics: [],
+          diagnostics,
         }
       } catch (error) {
-        if (error instanceof EvaluationError) return { diagnostics: error.diagnostics }
-        return { shape: withOccurrence(contextAnnotation(current), visitor), diagnostics: [] }
+        if (error instanceof EvaluationError)
+          return { diagnostics: [...diagnostics, ...error.diagnostics] }
+        return { shape: withOccurrence(contextAnnotation(current), visitor), diagnostics }
       }
     }
-    let value = evaluateExpression(current, structurePitch, structureEnvironment)
+    let selected = capturePrints(() =>
+      evaluateExpression(current, structurePitch, structureEnvironment),
+    )
+    const value = selected.result
     if ('value' in value && value.value.kind === 'scoreFragment') {
+      selected.flush()
       const fragment = value.value
       const scope = changeVisitor(visitor, (context) => ({
         ...context,
@@ -2483,6 +2518,7 @@ function evaluateScorePass(
       }
     }
     if ('value' in value && value.value.kind === 'container') {
+      selected.flush()
       const variables = new Map<string, EvaluatedLiteral>()
       const fragment = (item: EvaluatedLiteral): Expression => {
         if (item.kind !== 'container') {
@@ -2529,17 +2565,18 @@ function evaluateScorePass(
     if (structurePitch !== context || structureEnvironment !== environment) {
       // A final-beat read can update a note. A phrase at that beat applies
       // when the next structural lookup reaches it.
-      const attack = evaluateExpression(current, context, environment)
-      if (isNoteValue(attack)) value = attack
+      const attack = capturePrints(() => evaluateExpression(current, context, environment))
+      if (isNoteValue(attack.result)) selected = attack
       else if (isNoteValue(value)) {
         const tuned =
           structureEnvironment === environment
             ? attack
-            : evaluateExpression(current, context, structureEnvironment)
-        if (isNoteValue(tuned) || !('value' in tuned)) value = tuned
-      } else if (!('value' in attack)) value = attack
+            : capturePrints(() => evaluateExpression(current, context, structureEnvironment))
+        if (isNoteValue(tuned.result) || !('value' in tuned.result)) selected = tuned
+      } else if (!('value' in attack.result)) selected = attack
     }
-    const evaluated = playablePitch(current, context, value)
+    selected.flush()
+    const evaluated = playablePitch(current, context, selected.result)
     let pitch: AttackShape['pitch']
     if ('pitch' in evaluated) pitch = evaluated.pitch
     else {
