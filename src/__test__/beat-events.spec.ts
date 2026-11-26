@@ -30,6 +30,15 @@ const audibleResult = (source: string, includeLabels = true) => {
 }
 
 describe('beat event expansion', () => {
+  it('visits descending range indices in score loops', () => {
+    const source = 'let melody <- (C D E F G) $ for(index of range(4, -1, -2)) { melody[index] }'
+    expect(audibleResult(source, false)).toEqual(audibleResult('G E C', false))
+  })
+
+  it('plays a positive range as a sequence of ratios', () => {
+    expect(audibleResult('range(2, 8, 2)', false)).toEqual(audibleResult('2/1 4/1 6/1', false))
+  })
+
   it.each(['() (C,) D', 'let empty <- () $ let single <- (C,) $ empty single D'])(
     'plays empty and singleton parallels in %s',
     (source) => {

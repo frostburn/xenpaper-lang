@@ -287,6 +287,20 @@ while(index @lt 3) {
 container expression once before the loop. Empty containers run no iterations.
 Xenpaper currently has positional containers. Use `|: ... :|` for musical repeats.
 
+The prelude's `range(end)`, `range(start, end)`, and `range(start, end, step)`
+return a sequence of integers with an exclusive end. The default start is
+`0` and the default step is `1`. A positive step counts up and a negative
+step counts down. A range is empty when its start is already at or past its
+end in the direction of the step. A zero step is an error. The range uses
+the harmonic segment expansion limit of 10,000 elements.
+
+```text
+let melody <- (C D E F G)
+for(index of range(4, -1, -2)) {
+  melody[index]
+}
+```
+
 `while(condition)` tests the condition before each iteration. A `let` in the
 body can shadow a binding for the next condition and iteration. Those bindings
 are local to the loop. An initially false condition emits no music, and a loop
@@ -568,7 +582,7 @@ declarations: music always wins and the meaning of a pitch token never depends
 on lexical scope.
 
 Every evaluation starts with a prelude written in Xenpaper itself. It currently
-declares `pi` and defines helpers such as `sqrt`, `cps`, and `eulerGenus`.
+declares `pi` and defines helpers such as `sqrt`, `range`, `cps`, and `eulerGenus`.
 Ordinary lexical shadowing can replace these names in a narrower scope.
 
 Named `fn` declarations and lambdas can be stored in variables, passed as
