@@ -60,6 +60,26 @@ export type ExpressionEvaluationResult =
 export const PRELUDE = `
 let pi <- 3.141592653589793r
 fn sqrt(radicand: ratio) { ret radicand ** 1/2 }
+fn range(start: integer, end: integer <- niente, step: integer <- 1/1) {
+  # Only a missing end gives different results for the two fallbacks.
+  if((end al 0) @ne (end al 1)) {
+    end <- start
+    start <- 0/1
+  }
+  step <- step al 1/1
+  if(step @eq 0) { throw(<<Range step must be nonzero.>>) }
+  if((step @gt 0 @and start @ge end) @or (step @lt 0 @and start @le end)) {
+    ret asSequence(())
+  }
+  let span <- (end - start) / step
+  # Round up to count the last starting value when the step overshoots end.
+  let count <- span - (span modc 1) + 1
+  let indices <- (1::count) - 1
+  let odd <- indices mod 2
+  # Split offsets so large steps across zero can stay exact.
+  let halfOffset <- (indices - odd) / 2 * step
+  ret asSequence(start + halfOffset + halfOffset + odd * step)
+}
 fn prod(factors: container) { ret arrayReduce((total, element) => total * ratio(element), factors, 1/1) }
 fn ground(scale: container) { ret scale - pitch(scale[0]) }
 fn equaveReduce(scale: container, equave: ratio <- niente) {

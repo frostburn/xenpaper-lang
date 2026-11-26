@@ -587,6 +587,42 @@ fn countOdds(limit: integer) {
   })
 
   it.each([
+    ['range(5)', [0, 1, 2, 3, 4]],
+    ['range(1, 5)', [1, 2, 3, 4]],
+    ['range(1, 7, 2)', [1, 3, 5]],
+    ['range(-4, 5, 2)', [-4, -2, 0, 2, 4]],
+    ['range(5, 0, -2)', [5, 3, 1]],
+    ['range(3, -3, -2)', [3, 1, -1]],
+    [
+      'range(-6755399441055744, 6755399441055744, 4503599627370496)',
+      [-6755399441055744, -2251799813685248, 2251799813685248],
+    ],
+    ['range(2, 3, 10)', [2]],
+    ['range(0)', []],
+    ['range(3, 3)', []],
+    ['range(2, 0)', []],
+    ['range(0, 3, -1)', []],
+  ] as const)('returns the integer sequence for %s', (source, expected) => {
+    const values = evaluate(source)
+    if (values.kind !== 'container') throw new Error('Expected a container.')
+    expect(values.composition).toBe('sequence')
+    expect(values.values.map((item) => item.value.exactRational()?.toFraction())).toEqual(
+      expected.map(String),
+    )
+  })
+
+  it.each([
+    ['range(3, 3, 0)', 'XP_THROW', 'Range step must be nonzero.'],
+    ['range(3/2)', 'XP_PARAMETER_COERCION', 'start: Value cannot be coerced to integer.'],
+    ['range(1, 3, 1/2)', 'XP_PARAMETER_COERCION', 'step: Value cannot be coerced to integer.'],
+    ['range(0, 20001, 2)', 'XP_EXPANSION_LIMIT', undefined],
+  ] as const)('reports invalid range arguments in %s', (source, code, message) => {
+    expect(evaluateExpression(expression(source)).diagnostics).toMatchObject([
+      { code, ...(message && { message }) },
+    ])
+  })
+
+  it.each([
     [
       'eulerGenus(45)',
       [
