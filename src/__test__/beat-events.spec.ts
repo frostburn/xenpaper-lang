@@ -30,6 +30,25 @@ const audibleResult = (source: string, includeLabels = true) => {
 }
 
 describe('beat event expansion', () => {
+  it('reuses a slice on containers of different lengths and rhythmic forms', () => {
+    const source =
+      'let tail <- slice(-2, niente) $ let melody <- (C D E) $ let chord <- [F, G, A, B] $ melody[tail] chord[tail]'
+    expect(audibleResult(source, false)).toEqual(audibleResult('D E [A, B]', false))
+  })
+
+  it('keeps an empty normalized slice as a silent slot', () => {
+    expect(audibleResult('[C, D][slice(2, niente)] E', false)).toEqual(audibleResult('[] E', false))
+  })
+
+  it('diagnoses a slice used directly as a note', () => {
+    expect(expandToBeatEvents(parse('slice(1)')).diagnostics).toMatchObject([
+      {
+        code: 'XP_TYPE_MISMATCH',
+        message: 'Apply a slice to a container or string to select elements.',
+      },
+    ])
+  })
+
   it('visits descending range indices in score loops', () => {
     const source = 'let melody <- (C D E F G) $ for(index of range(4, -1, -2)) { melody[index] }'
     expect(audibleResult(source, false)).toEqual(audibleResult('G E C', false))

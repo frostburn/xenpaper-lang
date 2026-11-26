@@ -65,6 +65,10 @@ function printable(item: EvaluatedLiteral): unknown {
       return formatContainer(item)
     case 'record':
       return Object.fromEntries([...item.fields].map(([key, value]) => [key, printable(value)]))
+    case 'slice': {
+      const step = item.step === 1 ? '' : `, ${item.step}`
+      return `slice(${item.start ?? 'niente'}, ${item.end ?? 'niente'}${step})`
+    }
     case 'scoreFragment':
       return '<score>'
     case 'lambda':

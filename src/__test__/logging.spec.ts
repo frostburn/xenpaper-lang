@@ -35,6 +35,15 @@ describe('print and warn', () => {
     expect(log.mock.calls).toEqual([['[1d 2d]']])
   })
 
+  it('prints reusable slices with their bounds and step', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const result = expandToBeatEvents(
+      parse('let tail <- slice(-3, niente) $ print(tail, slice(niente, niente, -1))'),
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(log.mock.calls).toEqual([['slice(-3, niente)', 'slice(niente, niente, -1)']])
+  })
+
   it('prints strings inside collections without interpolating the next argument', () => {
     const output: string[] = []
     vi.spyOn(console, 'log').mockImplementation((...args) => output.push(format(...args)))

@@ -75,6 +75,7 @@ export type {
   EvaluatedLiteral,
   StringValue,
   RecordValue,
+  SliceValue,
   CallableValue,
   FunctionValue,
   LambdaValue,

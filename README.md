@@ -653,6 +653,26 @@ The result keeps the mask's composition and normalization.
 `notes[[true, false, true]]` gives `[C, E]`. An all-false normalized mask
 produces `[]`, a silent slot.
 
+`len(value)` counts top-level elements in a container, fields in a record,
+or Unicode code points in a string.
+
+`slice(start, end, step)` creates a selector for containers and strings. The
+end is exclusive, negative bounds count from the end, and bounds are clamped
+to the target's length. The step defaults to `1` and must be nonzero. Use
+`niente` for a default bound at the appropriate end of the target, depending
+on the step direction. The shorthand `slice(end)` uses the default start and
+step. `slice(niente, niente, -1)` reverses the target.
+
+The same selector can be used on containers of different lengths. The result
+keeps the source container's composition and normalization. An empty slice of
+a normalized slot is silent for that slot. String slices use Unicode code points.
+
+```text
+let tail <- slice(-3, niente)
+let melody <- (C D E F G)
+melody[tail]
+```
+
 ## Strings and records
 
 Write string literals as `<<text>>` or `«text»`. Both forms accept JSON

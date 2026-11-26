@@ -40,7 +40,7 @@ type NotatedPitchValue = EvaluatedLiteral | FrequencyPitchValue
 
 function formulaOf(value: NotatedPitchValue): PrimeMonzo | undefined {
   if (value.kind === 'absolutePitch') return value.formula
-  if (value.kind === 'frequency') return undefined
+  if (value.kind === 'frequency' || value.kind === 'slice') return undefined
   if (value.kind === 'pitchOffset')
     return value.formula ?? value.notationValue?.primeExponents() ?? value.value.primeExponents()
   return value.value.primeExponents()
@@ -124,7 +124,11 @@ function soundingValue(value: NotatedPitchValue): Value {
   if (value.kind === 'absolutePitch') return value.rootOffset
   if (value.kind === 'frequency') return value.notationValue
   if (value.kind === 'pitchOffset') return value.notationValue ?? value.value
-  if (!value.value.dimensions.isDimensionless || value.value.valueOf() <= 0) {
+  if (
+    value.kind === 'slice' ||
+    !value.value.dimensions.isDimensionless ||
+    value.value.valueOf() <= 0
+  ) {
     throw new TypeError('Staff notation requires a pitch or a positive ratio.')
   }
   return Value.pitch(value.value)
