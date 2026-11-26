@@ -39,6 +39,23 @@ describe('beat event expansion', () => {
     expect(audibleResult('range(2, 8, 2)', false)).toEqual(audibleResult('2/1 4/1 6/1', false))
   })
 
+  it.each([
+    ['[C, D, E]', '[(2 0 2)]', 'E C E'],
+    ['(C D E)', '[[2, 0, 2]]', '[E, C, E]'],
+    ['[C, D, E]', '[[(-1 0), (1,)]]', '[(E C), (D,)]'],
+    ['(C D E)', '[[2, 0]=]', '[E, C]='],
+    ['[C, D, E]', '[range(2, -1, -1)]', 'E D C'],
+    ['(C D E)', '[[1, 0, 1]]', '[D, C, D]'],
+    ['(C D E)', '[[true, false, true]]', '[C, E]'],
+    ['[C, D, E]', '[(true false true)]', 'C E'],
+    ['(C D E)', '[[false, false, false]]', '[]'],
+    ['[C, D, E]', '[(false, false, false)]', ''],
+    ['[C, D, E]', '[()]', ''],
+  ])('plays the shape defined by the index %s%s', (melody, index, expected) => {
+    const source = `let melody <- ${melody} $ melody${index} G`
+    expect(audibleResult(source, false)).toEqual(audibleResult(`${expected} G`, false))
+  })
+
   it.each(['() (C,) D', 'let empty <- () $ let single <- (C,) $ empty single D'])(
     'plays empty and singleton parallels in %s',
     (source) => {

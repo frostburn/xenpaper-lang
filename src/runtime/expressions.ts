@@ -15,6 +15,7 @@ import { equaveShift as modifierEquaveShift } from './pitch-modifiers.js'
 import type {
   EvaluatedLiteral,
   CallableValue,
+  ContainerValue,
   FunctionDefinition,
   LexicalEnvironment,
   PitchOffsetValue,
@@ -1155,6 +1156,34 @@ function applyUnary(
   }
 }
 
+function isBooleanIndex(value: EvaluatedLiteral): boolean {
+  return value.kind === 'scalar' && value.boolean === true
+}
+
+function containerElement(collection: ContainerValue, index: EvaluatedLiteral): EvaluatedLiteral {
+  const element = collection.values.at(scalarInteger(index, 'Container index'))
+  if (!element) throw new RangeError('Container index is out of range.')
+  return element
+}
+
+function indexContainer(collection: ContainerValue, indices: ContainerValue): ContainerValue {
+  if (indices.values.length && indices.values.every(isBooleanIndex)) {
+    if (indices.values.length !== collection.values.length)
+      throw new RangeError('Boolean mask length must match the number of container elements.')
+    const values = collection.values.filter((_, index) => isTruthy(indices.values[index]!))
+    // An emptied normalized mask is the silent slot written [].
+    const composition = indices.normalized && !values.length ? undefined : indices.composition
+    return { ...indices, composition, values }
+  }
+  function gather(index: EvaluatedLiteral): EvaluatedLiteral {
+    if (index.kind === 'container') return { ...index, values: index.values.map(gather) }
+    if (isBooleanIndex(index))
+      throw new TypeError('Boolean masks must be flat and contain only Booleans.')
+    return containerElement(collection, index)
+  }
+  return { ...indices, values: indices.values.map(gather) }
+}
+
 function indexedValue(collection: EvaluatedLiteral, index: EvaluatedLiteral): EvaluatedLiteral {
   if (collection.kind === 'record') {
     if (index.kind !== 'string') throw new TypeError('Record keys must be strings.')
@@ -1162,18 +1191,17 @@ function indexedValue(collection: EvaluatedLiteral, index: EvaluatedLiteral): Ev
     if (!value) throw new RangeError(`Record has no field ${JSON.stringify(index.text)}.`)
     return value
   }
-  if (collection.kind !== 'container' && collection.kind !== 'string')
-    throw new TypeError('Indexing requires a container, record, or string.')
-  const label = collection.kind === 'string' ? 'String index' : 'Container index'
-  const offset = scalarInteger(index, label)
+  if (collection.kind === 'container')
+    return index.kind === 'container'
+      ? indexContainer(collection, index)
+      : containerElement(collection, index)
   if (collection.kind === 'string') {
+    const offset = scalarInteger(index, 'String index')
     const point = Array.from(collection.text).at(offset)
-    if (point !== undefined) return stringValue(point, [...collection.origins, ...index.origins])
-  } else {
-    const item = collection.values.at(offset)
-    if (item) return item
+    if (point === undefined) throw new RangeError('String index is out of range.')
+    return stringValue(point, [...collection.origins, ...index.origins])
   }
-  throw new RangeError(`${label} is out of range.`)
+  throw new TypeError('Indexing requires a container, record, or string.')
 }
 
 /** Evaluate in the supplied lexical and pitch context, retaining source-located diagnostics. */
@@ -1266,7 +1294,10 @@ export function evaluateExpression(
       }
       case 'IndexExpression': {
         const collection = evaluate(node.container)
-        const index = evaluate(node.index)
+        const index =
+          'value' in collection && collection.value.kind === 'container'
+            ? evaluateBuiltinArgument(node.index, 'integer', environment, evaluate)
+            : evaluate(node.index)
         diagnostics.push(...collection.diagnostics, ...index.diagnostics)
         if (!('value' in collection && 'value' in index)) return { diagnostics }
         return done(indexedValue(collection.value, index.value))
