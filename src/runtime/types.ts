@@ -312,6 +312,15 @@ export interface RecordValue {
   readonly origins: readonly SourceOrigin[]
 }
 
+/** Bounds resolved against the length of the indexed value on each use. */
+export interface SliceValue {
+  readonly kind: 'slice'
+  readonly start?: number
+  readonly end?: number
+  readonly step: number
+  readonly origins: readonly SourceOrigin[]
+}
+
 /** A lexically captured anonymous function. */
 export interface LambdaValue {
   readonly kind: 'lambda'
@@ -438,6 +447,7 @@ export type EvaluatedLiteral =
   | UndefinedValue
   | StringValue
   | RecordValue
+  | SliceValue
   | CallableValue
 
 /** Renderer-independent description of a note on a treble/bass staff. */

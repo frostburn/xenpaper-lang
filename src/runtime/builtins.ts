@@ -110,6 +110,8 @@ export function evaluateBuiltinArgument(
 const signatures = {
   print: [],
   warn: [null],
+  len: [null],
+  slice: ['integer', 'integer', 'integer'],
   pitch: ['ratio'],
   ratio: ['pitch'],
   flat: ['container'],
@@ -121,6 +123,23 @@ const signatures = {
   arrayMap: [null, 'container'],
   arrayReduce: [null, 'container', null],
 } as const
+
+function lengthOf(item: EvaluatedLiteral): number {
+  switch (item.kind) {
+    case 'container':
+      return item.values.length
+    case 'record':
+      return item.fields.size
+    case 'string':
+      return Array.from(item.text).length
+    default:
+      throw new TypeError('len() expects a container, record, or string.')
+  }
+}
+
+function sliceBound(item: EvaluatedLiteral | undefined, name: string): number | undefined {
+  return !item || item.kind === 'undefined' ? undefined : requireInteger(item, name)
+}
 
 function convert(item: EvaluatedLiteral, target: 'pitch' | 'ratio'): EvaluatedLiteral {
   if (item.kind === 'container')
@@ -160,7 +179,7 @@ export function evaluateBuiltinCall(
   const name = node.callee as keyof typeof signatures
   const parameters = signatures[name]
   const count = node.arguments.length
-  const min = name === 'arrayReduce' ? 2 : parameters.length
+  const min = name === 'arrayReduce' ? 2 : name === 'slice' ? 1 : parameters.length
   if (name !== 'print' && (count < min || count > parameters.length)) {
     const expected = min === parameters.length ? String(min) : `${min} to ${parameters.length}`
     throw new TypeError(
@@ -192,6 +211,31 @@ export function evaluateBuiltinCall(
       locations: [node.location],
     })
     return { value: container([]), diagnostics }
+  }
+  if (name === 'len') {
+    return {
+      value: {
+        kind: 'scalar',
+        value: new Value(lengthOf(args[0]!)),
+        origins: [{ role: 'literal', location: node.location }],
+      },
+      diagnostics,
+    }
+  }
+  if (name === 'slice') {
+    const [start, end, stride] = args.length === 1 ? [undefined, args[0]] : args
+    const step = sliceBound(stride, 'Slice step') ?? 1
+    if (step === 0) throw new RangeError('Slice step must be nonzero.')
+    return {
+      value: {
+        kind: 'slice',
+        start: sliceBound(start, 'Slice start'),
+        end: sliceBound(end, 'Slice end'),
+        step,
+        origins: [{ role: 'literal', location: node.location }],
+      },
+      diagnostics,
+    }
   }
   if (name === 'pitch' || name === 'ratio') return { value: convert(args[0]!, name), diagnostics }
   const higherOrder = name === 'arrayMap' || name === 'arrayReduce'

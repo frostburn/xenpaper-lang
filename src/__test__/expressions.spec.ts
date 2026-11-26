@@ -81,6 +81,54 @@ describe('arithmetic expression evaluation', () => {
   })
 
   it.each([
+    ['len([(1 2) [3, 4] 5])', 3],
+    ['len(())', 0],
+    ['len(record { title: «test», notes: [C D E] })', 2],
+    ['len(«a🎶e\\u0301»)', 4],
+  ] as const)('counts the top-level elements for %s', (source, count) => {
+    const value = evaluate(source)
+    expect(value.kind === 'scalar' && value.value.exactRational()?.n).toBe(count)
+  })
+
+  it.each([
+    ['slice(-2, niente)', [30, 40]],
+    ['slice(2)', [10, 20]],
+    ['slice(-20, 20, 2)', [10, 30]],
+    ['slice(20, -20, -2)', [40, 20]],
+    ['slice(niente, niente, -1)', [40, 30, 20, 10]],
+    ['slice(niente, -1, -1)', []],
+    ['slice(10, niente)', []],
+  ] as const)('resolves %s against the length and keeps source rhythm', (selector, expected) => {
+    const selected = evaluate(`[10/1 20/1 30/1 40/1][${selector}]`)
+    if (selected.kind !== 'container') throw new Error('Expected a container.')
+    expect(selected.normalized).toBe(true)
+    expect(selected.values.map((item) => item.kind === 'scalar' && item.value.valueOf())).toEqual(
+      expected,
+    )
+  })
+
+  it('slices strings by Unicode code point', () => {
+    expect(evaluate('«a🎶🎵b»[slice(1, -1)]')).toMatchObject({ kind: 'string', text: '🎶🎵' })
+    expect(evaluate('«a🎶»[slice(niente, niente, -1)]')).toMatchObject({
+      kind: 'string',
+      text: '🎶a',
+    })
+  })
+
+  it.each([
+    ['len(3/2)', 'len() expects a container, record, or string.'],
+    ['slice(0, 2, 0)', 'Slice step must be nonzero.'],
+    ['slice(1/2, 2)', 'Slice start must be an integer.'],
+    ['slice(0, 2, 1/2)', 'Slice step must be an integer.'],
+    ['record { title: «test» }[slice(1)]', 'Slice indexing requires a container or string.'],
+    ['slice(1) + 1/1', 'Operator + requires numeric operands.'],
+  ] as const)('reports invalid length or slice operations for %s', (source, message) => {
+    expect(evaluateExpression(expression(source)).diagnostics).toMatchObject([
+      { code: 'XP_TYPE_MISMATCH', message },
+    ])
+  })
+
+  it.each([
     ['[10/1 20/1][[true]]', 'Boolean mask length must match the number of container elements.'],
     ['[10/1 20/1][[1, false]]', 'Boolean masks must be flat and contain only Booleans.'],
     ['[10/1 20/1][[(true, false)]]', 'Boolean masks must be flat and contain only Booleans.'],

@@ -570,6 +570,7 @@ export function applyPitchContextChange(
           value.kind === 'scoreFragment' ||
           value.kind === 'string' ||
           value.kind === 'record' ||
+          value.kind === 'slice' ||
           isCallableValue(value)
         )
           throw new TypeError('Degree assignments require pitch intervals.')
@@ -592,7 +593,11 @@ export function applyPitchContextChange(
         const prime = PRIMES[index]
         if (prime === undefined) throw new RangeError('Prime mapping exceeds the supported primes.')
         const evaluated = evaluateExpression(expression, context)
-        if (!('value' in evaluated) || evaluated.value.kind === 'absolutePitch')
+        if (
+          !('value' in evaluated) ||
+          evaluated.value.kind === 'absolutePitch' ||
+          evaluated.value.kind === 'slice'
+        )
           throw new TypeError('Prime mapping entries require pitch intervals.')
         const value =
           evaluated.value.kind === 'pitchOffset'
@@ -682,7 +687,11 @@ export function applyPitchContextChange(
     }
     if (statement.target.type === 'ContextNameTarget' && statement.target.name === 'equave') {
       const evaluated = evaluateExpression(statement.value, context)
-      if (!('value' in evaluated) || evaluated.value.kind === 'absolutePitch')
+      if (
+        !('value' in evaluated) ||
+        evaluated.value.kind === 'absolutePitch' ||
+        evaluated.value.kind === 'slice'
+      )
         throw new TypeError('An equave assignment requires a pitch interval.')
       const degreeEquave =
         evaluated.value.kind === 'pitchOffset'
@@ -738,7 +747,11 @@ export function applyPitchContextChange(
     }
     if (statement.target.type === 'ContextOperatorTarget') {
       const evaluated = evaluateExpression(statement.value, context)
-      if (!('value' in evaluated) || evaluated.value.kind === 'absolutePitch')
+      if (
+        !('value' in evaluated) ||
+        evaluated.value.kind === 'absolutePitch' ||
+        evaluated.value.kind === 'slice'
+      )
         throw new TypeError('Pitch operator assignment requires a pitch interval.')
       const value =
         evaluated.value.kind === 'pitchOffset'
@@ -761,7 +774,11 @@ export function applyPitchContextChange(
 
 function mosSetterValue(expression: Expression, context: PitchContext): Value {
   const evaluated = evaluateExpression(expression, context)
-  if (!('value' in evaluated) || evaluated.value.kind === 'absolutePitch')
+  if (
+    !('value' in evaluated) ||
+    evaluated.value.kind === 'absolutePitch' ||
+    evaluated.value.kind === 'slice'
+  )
     throw new TypeError('A MOS step assignment requires a pitch interval.')
   return evaluated.value.kind === 'pitchOffset'
     ? evaluated.value.value

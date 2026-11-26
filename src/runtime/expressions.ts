@@ -20,6 +20,7 @@ import type {
   LexicalEnvironment,
   PitchOffsetValue,
   ScalarValue,
+  SliceValue,
   StringValue,
   SourceOrigin,
 } from './types.js'
@@ -563,7 +564,16 @@ function operatorOrigins(
   return [...left.origins, ...right.origins, { location: node.location, role: 'operator' }]
 }
 
-function pitchCoercion(value: EvaluatedLiteral): PitchOffsetValue {
+type ArithmeticValue = Extract<
+  EvaluatedLiteral,
+  { kind: 'scalar' | 'pitchOffset' | 'absolutePitch' }
+>
+
+function isArithmeticValue(value: EvaluatedLiteral): value is ArithmeticValue {
+  return value.kind === 'scalar' || value.kind === 'pitchOffset' || value.kind === 'absolutePitch'
+}
+
+function pitchCoercion(value: ArithmeticValue): PitchOffsetValue {
   if (value.kind === 'pitchOffset') return value
   if (value.kind === 'absolutePitch')
     throw new TypeError('An absolute pitch cannot be coerced to a pitch offset.')
@@ -575,8 +585,8 @@ function pitchCoercion(value: EvaluatedLiteral): PitchOffsetValue {
 }
 
 function addOrSubtract(
-  left: EvaluatedLiteral,
-  right: EvaluatedLiteral,
+  left: ArithmeticValue,
+  right: ArithmeticValue,
   subtract: boolean,
   node: Expression,
 ): EvaluatedLiteral {
@@ -710,8 +720,8 @@ function addOrSubtract(
 }
 
 function multiplyOrDivide(
-  left: EvaluatedLiteral,
-  right: EvaluatedLiteral,
+  left: ArithmeticValue,
+  right: ArithmeticValue,
   divide: boolean,
   node: Expression,
 ): EvaluatedLiteral {
@@ -745,8 +755,8 @@ function multiplyOrDivide(
 }
 
 function modulo(
-  left: EvaluatedLiteral,
-  right: EvaluatedLiteral,
+  left: ArithmeticValue,
+  right: ArithmeticValue,
   ceiling: boolean,
   node: Expression,
 ): EvaluatedLiteral {
@@ -834,6 +844,7 @@ export function isTruthy(value: EvaluatedLiteral): boolean {
   if (value.kind === 'container') return value.values.length > 0
   if (value.kind === 'string') return value.text.length > 0
   if (value.kind === 'record') return value.fields.size > 0
+  if (value.kind === 'slice') return true
   return !value.value.isZero()
 }
 
@@ -872,18 +883,7 @@ function binary(
       ),
     }
   }
-  if (
-    left.kind === 'undefined' ||
-    right.kind === 'undefined' ||
-    isCallableValue(left) ||
-    isCallableValue(right) ||
-    left.kind === 'scoreFragment' ||
-    right.kind === 'scoreFragment' ||
-    left.kind === 'string' ||
-    right.kind === 'string' ||
-    left.kind === 'record' ||
-    right.kind === 'record'
-  )
+  if (!isArithmeticValue(left) || !isArithmeticValue(right))
     throw new TypeError(`Operator ${operator} requires numeric operands.`)
   switch (operator) {
     case '+':
@@ -1166,14 +1166,18 @@ function containerElement(collection: ContainerValue, index: EvaluatedLiteral): 
   return element
 }
 
+function withSelection(shape: ContainerValue, values: readonly EvaluatedLiteral[]): ContainerValue {
+  // An empty normalized selection is the silent slot written [].
+  const composition = shape.normalized && !values.length ? undefined : shape.composition
+  return { ...shape, composition, values }
+}
+
 function indexContainer(collection: ContainerValue, indices: ContainerValue): ContainerValue {
   if (indices.values.length && indices.values.every(isBooleanIndex)) {
     if (indices.values.length !== collection.values.length)
       throw new RangeError('Boolean mask length must match the number of container elements.')
     const values = collection.values.filter((_, index) => isTruthy(indices.values[index]!))
-    // An emptied normalized mask is the silent slot written [].
-    const composition = indices.normalized && !values.length ? undefined : indices.composition
-    return { ...indices, composition, values }
+    return withSelection(indices, values)
   }
   function gather(index: EvaluatedLiteral): EvaluatedLiteral {
     if (index.kind === 'container') return { ...index, values: index.values.map(gather) }
@@ -1184,7 +1188,36 @@ function indexContainer(collection: ContainerValue, indices: ContainerValue): Co
   return { ...indices, values: indices.values.map(gather) }
 }
 
+function sliceElements<T>(elements: readonly T[], { start, end, step }: SliceValue): T[] {
+  if (step === 0) throw new RangeError('Slice step must be nonzero.')
+  const forward = step > 0
+  const length = elements.length
+  const lower = forward ? 0 : -1
+  const upper = forward ? length : length - 1
+  const resolve = (bound: number | undefined, fallback: number) =>
+    bound === undefined
+      ? fallback
+      : Math.max(lower, Math.min(upper, bound < 0 ? bound + length : bound))
+  const first = resolve(start, forward ? lower : upper)
+  // The omitted reverse stop is before index zero. An explicit -1 is the last index.
+  const stop = resolve(end, forward ? upper : lower)
+  const selected: T[] = []
+  for (let index = first; forward ? index < stop : index > stop; index += step)
+    selected.push(elements[index]!)
+  return selected
+}
+
 function indexedValue(collection: EvaluatedLiteral, index: EvaluatedLiteral): EvaluatedLiteral {
+  if (index.kind === 'slice') {
+    if (collection.kind === 'container')
+      return withSelection(collection, sliceElements(collection.values, index))
+    if (collection.kind === 'string')
+      return stringValue(sliceElements(Array.from(collection.text), index).join(''), [
+        ...collection.origins,
+        ...index.origins,
+      ])
+    throw new TypeError('Slice indexing requires a container or string.')
+  }
   if (collection.kind === 'record') {
     if (index.kind !== 'string') throw new TypeError('Record keys must be strings.')
     const value = collection.fields.get(index.text)

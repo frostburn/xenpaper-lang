@@ -652,14 +652,17 @@ function playablePitch(
     }
   | { readonly diagnostics: readonly Diagnostic[] } {
   if (!('value' in evaluated)) return evaluated
-  if (isCallableValue(evaluated.value))
+  if (isCallableValue(evaluated.value) || evaluated.value.kind === 'slice')
     return {
       diagnostics: [
         ...evaluated.diagnostics,
         {
           code: 'XP_TYPE_MISMATCH',
           severity: 'error',
-          message: 'Call the function to play its result.',
+          message:
+            evaluated.value.kind === 'slice'
+              ? 'Apply a slice to a container or string to select elements.'
+              : 'Call the function to play its result.',
           locations: [node.location],
         },
       ],
