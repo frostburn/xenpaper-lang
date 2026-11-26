@@ -122,32 +122,6 @@ const signatures = {
   arrayReduce: [null, 'container', null],
 } as const
 
-function printable(item: EvaluatedLiteral): unknown {
-  switch (item.kind) {
-    case 'string':
-      return item.text
-    case 'undefined':
-      return undefined
-    case 'scalar':
-      if (item.boolean) return !item.value.isZero()
-      return item.value.dimensions.isDimensionless ? item.value.valueOf() : item.value.toString()
-    case 'absolutePitch':
-      return item.spelling.raw
-    case 'pitchOffset':
-      return item.spelling?.raw ?? item.value.toString()
-    case 'container':
-      return item.values.map(printable)
-    case 'record':
-      return Object.fromEntries([...item.fields].map(([key, value]) => [key, printable(value)]))
-    case 'scoreFragment':
-      return '<score>'
-    case 'lambda':
-      return '<lambda>'
-    case 'function':
-      return `<function ${item.definition.declaration.name.name}>`
-  }
-}
-
 function convert(item: EvaluatedLiteral, target: 'pitch' | 'ratio'): EvaluatedLiteral {
   if (item.kind === 'container')
     return { ...item, values: item.values.map((v) => convert(v, target)) }
@@ -205,7 +179,7 @@ export function evaluateBuiltinCall(
   if (!supplied.every((argument) => 'value' in argument)) return { diagnostics }
   const args = supplied.map((argument) => argument.value)
   if (name === 'print') {
-    print(args.map(printable))
+    print(args)
     return { value: container([]), diagnostics }
   }
   if (name === 'warn') {

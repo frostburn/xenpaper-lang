@@ -343,6 +343,8 @@ try {
 ```
 
 `print(...)` sends any number of evaluated arguments to `console.log`.
+It displays containers in Xenpaper syntax, preserving their structure.
+For example, `print((1 2), [1 2], [1, 2])` displays `(1 2)`, `[1 2]`, and `[1, 2]`.
 `warn(message)` takes a string and adds an `XP_WARN` diagnostic with severity
 `warning` and the source range of the call. Hosts receive it in the same
 `diagnostics` array as errors. Both calls return `()` and take no score time.

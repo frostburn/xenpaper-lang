@@ -1,3 +1,4 @@
+import { format } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { expandToBeatEvents, evaluateExpression, evaluateInitialization, parse } from '../index.js'
 
@@ -11,7 +12,35 @@ describe('print and warn', () => {
       diagnostics: [],
     })
     evaluateExpression(parse('print(«step», 2, true, [3/2 4/3], C)').body[0]!)
-    expect(log.mock.calls).toEqual([[], ['step', 2, true, [1.5, 4 / 3], 'C']])
+    expect(log.mock.calls).toEqual([[], ['step', 2, true, '[3/2 4/3]', 'C']])
+  })
+
+  it.each([
+    ['(1 2), [1 2], [1, 2]', ['(1 2)', '[1 2]', '[1, 2]']],
+    ['(), [], (2,), [()], [(2,)]', ['()', '[]', '(2,)', '[()]', '[(2,)]']],
+    ['([1 2]), [(1 2)], [(C=, D!) [3/2 4/3]]=', ['([1 2])', '[(1 2)]', '[(C=, D!) [3/2 4/3]]=']],
+    ['asSequence([C, D]), asParallel([C D])', ['(C D)', '(C, D)']],
+    ['(«a b», «c\\»d», niente)', ['(«a b», «c\\»d», niente)']],
+  ])('prints the collection structure in %s', (args, expected) => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const result = evaluateExpression(parse(`print(${args})`).body[0]!)
+    expect(result.diagnostics).toEqual([])
+    expect(log.mock.calls).toEqual([expected])
+  })
+
+  it('prints the structure and degrees of a stored collection', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const result = expandToBeatEvents(parse('let notes <- [1 2] $ print(notes)'))
+    expect(result.diagnostics).toEqual([])
+    expect(log.mock.calls).toEqual([['[1d 2d]']])
+  })
+
+  it('prints strings inside collections without interpolating the next argument', () => {
+    const output: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((...args) => output.push(format(...args)))
+    const result = evaluateExpression(parse('print([«literal %s» 2], 3)').body[0]!)
+    expect(result.diagnostics).toEqual([])
+    expect(output).toEqual(['[«literal %s» 2] 3'])
   })
 
   it('returns a warning through the score diagnostic array without adding time', () => {
