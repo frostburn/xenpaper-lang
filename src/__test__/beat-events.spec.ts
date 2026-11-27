@@ -30,6 +30,105 @@ const audibleResult = (source: string, includeLabels = true) => {
 }
 
 describe('beat event expansion', () => {
+  it('fits a returned phrase to an exact beat duration regardless of subdivision', () => {
+    const result = audibleResult(`
+let span <- 3/2 * 1beat
+fn phrase(length) { ret fit((C= D .), length) }
+@4 phrase(span) E
+`)
+    expect(result.events.map(({ start, duration }) => [start, duration])).toEqual([
+      ['0', '3/4'],
+      ['3/4', '3/8'],
+      ['3/2', '1/4'],
+    ])
+    expect(result.duration).toBe('7/4')
+  })
+
+  it('fits rests and chords and keeps fitted scores reusable', () => {
+    const source = 'let chord <- fit((C, E, G), 2beat) $ fit(., 0.375beat) chord chord'
+    const result = audibleResult(source)
+    expect(result.events.map(({ start, duration }) => [start, duration])).toEqual([
+      ['3/8', '2'],
+      ['3/8', '2'],
+      ['3/8', '2'],
+      ['19/8', '2'],
+      ['19/8', '2'],
+      ['19/8', '2'],
+    ])
+    expect(result.duration).toBe('35/8')
+  })
+
+  it('keeps subdivision and dynamics inside the fitted fragment', () => {
+    const result = audibleResult('fit((@4 @p C== D), 2beat) E')
+    expect(result.events.map(({ start, duration }) => [start, duration])).toEqual([
+      ['0', '3/2'],
+      ['3/2', '1/2'],
+      ['2', '1'],
+    ])
+    expect(result.events[0]?.dynamic).toBe(result.events[1]?.dynamic)
+    expect(result.events[1]?.dynamic).not.toBe(result.events[2]?.dynamic)
+  })
+
+  it.each(['1/1', '1s', '0beat', '-1beat', '1.5r * 1beat', 'C'])(
+    'requires a positive exact beat duration in fit(C, %s)',
+    (span) => {
+      expect(expandToBeatEvents(parse(`fit(C, ${span})`)).diagnostics).toMatchObject([
+        { code: 'XP_FIT_DURATION' },
+      ])
+    },
+  )
+
+  it.each([
+    ['fit(C)', 'XP_ARITY'],
+    ['fit((), 2beat)', 'XP_NORMALIZE_ZERO'],
+  ])('diagnoses %s', (source, code) => {
+    expect(expandToBeatEvents(parse(source)).diagnostics).toMatchObject([{ code }])
+  })
+
+  it.each(['phrase() + interval', 'interval + (phrase())', 'phrase() + M2 + P4'])(
+    'broadcasts over returned notes, ties, rests, and chords in %s',
+    (transposed) => {
+      const result = audibleResult(`
+{12edo}
+let interval <- P5
+fn phrase() { let interval <- P1 $ ret (C -> C) . (D, F) }
+fit(${transposed}, 8beat) E
+`)
+      expect(
+        result.events.map(({ start, duration, pitch }) => [start, duration, pitch[1]]),
+      ).toEqual([
+        ['0', '4', 700],
+        ['6', '2', 900],
+        ['6', '2', 1200],
+        ['8', '1', 400],
+      ])
+    },
+  )
+
+  it('resolves a stored transposition in the tuning at each attack', () => {
+    const source = '{12edo} let phrase <- (C {19edo} C) $ let raised <- phrase + P5 $ raised'
+    expect(audibleResult(source, false)).toEqual(
+      audibleResult('{12edo} (C + P5) {19edo} (C + P5)', false),
+    )
+  })
+
+  it.each([
+    ['@2 C= . (E, G)', 'phrase() + 3/2', '(@2 C= . (E, G)) + 3/2'],
+    ['@2 P1= . (M3, P5)', 'phrase() * 3/2', '(@2 P1= . (M3, P5)) * 3/2'],
+    ['@2 5/4= . (3/2, 9/8)', '3/2 / phrase()', '3/2 / (@2 5/4= . (3/2, 9/8))'],
+  ])('uses ordinary pitch arithmetic for %s in %s', (body, call, inline) => {
+    expect(audibleResult(`{12edo} fn phrase() { ret ${body} } (${call}) C`, false)).toEqual(
+      audibleResult(`{12edo} (${inline}) C`, false),
+    )
+  })
+
+  it('retains the arithmetic error for scaling absolute pitches in a returned score', () => {
+    const source = 'fn phrase() { ret @2 C } phrase() * 3/2'
+    expect(expandToBeatEvents(parse(source)).diagnostics).toMatchObject([
+      { code: 'XP_TYPE_MISMATCH', message: 'Absolute pitches cannot be multiplied or divided.' },
+    ])
+  })
+
   it('reuses a slice on containers of different lengths and rhythmic forms', () => {
     const source =
       'let tail <- slice(-2, niente) $ let melody <- (C D E) $ let chord <- [F, G, A, B] $ melody[tail] chord[tail]'

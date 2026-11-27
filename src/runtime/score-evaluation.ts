@@ -4,9 +4,11 @@ import type { Diagnostic } from '../diagnostics.js'
 import { catchableDiagnostic, EvaluationError } from '../diagnostics.js'
 import { isPositiveRationalRatio, Value } from '../value.js'
 import {
+  applyScorePitchOperations,
   evaluateBindings,
   evaluateDeclaration,
   evaluateExpression,
+  evaluateFitCall,
   evaluateThrow,
   isTruthy,
   preludeEnvironment,
@@ -57,6 +59,7 @@ import type {
   DynamicMark,
   DirectiveExtensionState,
   ScoreShapeOptions,
+  ScorePitchOperation,
   LexicalEnvironment,
   ScoreShapeEvaluationResult,
   ScoreVisitorContext,
@@ -122,6 +125,7 @@ interface VisitorScope {
   readonly timelineVisit?: TimelineVisit
   readonly normalizationBase?: ScoreVisitorContext
   readonly lockedPulse?: Fraction
+  readonly pitchOperations?: readonly ScorePitchOperation[]
   readonly base: ScoreVisitorContext
   readonly resolve: ContextResolver
   readonly subdivisionContext: ContextResolver
@@ -1193,6 +1197,105 @@ function evaluateScorePass(
     )
   }
 
+  const fitScore = (
+    expression: Expression,
+    target: Fraction,
+    source: Expression,
+    visitor: ScoreVisitor,
+  ): ScoreShapeEvaluationResult => {
+    const normalizedSlot = source.type === 'NormalizeToSlot'
+    const local = {
+      loop: undefined,
+      subdivisionContext: visitor.scope.resolve,
+      declarationScope: {},
+      // Inside a fitted fragment, use the entry context to select its rhythm.
+      // Realized attacks still read the tuning at their final beats.
+      normalizationBase:
+        visitor.scope.normalizationBase ??
+        (timeline && (contextAt(options.initialization, visitor.scope.offset) ?? base)),
+    }
+    const entryBudget = flowBudget
+    const functionBudget = visitor.scope.environment?.functionBudget
+    const remaining = functionBudget?.remaining
+    const measured = capturePrints(() => visitor.visit(expression, { ...local, layout: true }))
+    let evaluated = measured.result
+    if (!hasShape(evaluated) || visitor.scope.layout || !evaluated.shape.duration.n)
+      measured.flush()
+    if (!hasShape(evaluated)) return evaluated
+    if (!evaluated.shape.duration.n)
+      return {
+        diagnostics: [
+          ...evaluated.diagnostics,
+          {
+            code: 'XP_NORMALIZE_ZERO',
+            severity: 'error',
+            message: normalizedSlot
+              ? 'A non-empty zero-duration fragment cannot be normalized.'
+              : 'fit() requires music with a positive duration.',
+            locations: [source.location],
+          },
+        ],
+      }
+    if (!visitor.scope.layout) {
+      const tried = new Set<string>()
+      for (;;) {
+        const duration: Fraction = evaluated.shape.duration
+        if (!duration.n || tried.has(duration.toFraction()) || tried.size >= 32)
+          return {
+            diagnostics: [
+              {
+                code: 'XP_TIMELINE_LAYOUT',
+                severity: 'error',
+                message: normalizedSlot
+                  ? 'Timed context changes do not produce a stable rhythm inside this normalized slot.'
+                  : 'Timed context changes do not produce a stable rhythm inside fit().',
+                locations: [source.location],
+              },
+            ],
+          }
+        tried.add(duration.toFraction())
+        if (!normalizedSlot) {
+          // Count only the realized evaluation against the fragment's budgets.
+          flowBudget = entryBudget
+          if (functionBudget && remaining !== undefined) functionBudget.remaining = remaining
+        }
+        const placed = capturePrints(() =>
+          visitor.visit(expression, {
+            ...local,
+            lockedPulse: visitor.scope.base.pulse,
+            timeScale: visitor.scope.timeScale.mul(target).div(duration),
+          }),
+        )
+        evaluated = placed.result
+        if (!hasShape(evaluated) || evaluated.shape.duration.equals(duration)) {
+          placed.flush()
+          if (!hasShape(evaluated)) return evaluated
+          break
+        }
+      }
+    }
+    const shape = scaleShape(evaluated.shape, target.div(evaluated.shape.duration))
+    const diagnostics = evaluated.diagnostics
+    if (!normalizedSlot || (shape.kind !== 'sequence' && shape.kind !== 'parallel'))
+      return { shape: { ...shape, isolatedDirectiveScope: true }, diagnostics }
+    const slots = evaluated.shape.duration.div(target)
+    const tuplet = slots.d === 1 ? slots.n : undefined
+    return {
+      shape: {
+        ...shape,
+        normalized: true,
+        isolatedDirectiveScope: true,
+        ...(shape.kind === 'sequence' &&
+        tuplet &&
+        tuplet > 1 &&
+        !Number.isInteger(Math.log2(tuplet))
+          ? { tuplet }
+          : {}),
+      },
+      diagnostics,
+    }
+  }
+
   const evaluateNode: VisitorEvaluation<
     ScoreExpression,
     VisitorScope,
@@ -1462,13 +1565,16 @@ function evaluateScorePass(
       )
     }
     if (current.type === 'DrumSampleLiteral') {
-      return visitor.visit({
-        type: 'DegreeLiteral',
-        degree: '0',
-        modifiers: [],
-        raw: current.sample,
-        location: current.location,
-      })
+      return visitor.visit(
+        {
+          type: 'DegreeLiteral',
+          degree: '0',
+          modifiers: [],
+          raw: current.sample,
+          location: current.location,
+        },
+        { pitchOperations: undefined },
+      )
     }
     if (current.type === 'CallExpression') {
       const returned = evaluateFunctionCall(
@@ -1494,6 +1600,13 @@ function evaluateScorePass(
             isolatedDirectiveScope: true,
           },
         }
+      }
+      if (current.callee === 'fit') {
+        const fitted = evaluateFitCall(current, structurePitch, structureEnvironment)
+        if (!('value' in fitted)) return fitted
+        const { expression, targetDuration } = fitted.value
+        const played = fitScore(expression, targetDuration, current, visitor)
+        return { ...played, diagnostics: [...fitted.diagnostics, ...played.diagnostics] }
       }
     }
     const broadcast = broadcastScalarOperation(current, structurePitch, structureEnvironment)
@@ -1959,6 +2072,7 @@ function evaluateScorePass(
               articulation: new Fraction(1),
               articulationMarks: [],
               directiveState: initialDirectiveState,
+              pitchOperations: undefined,
 
               subdivisionContext: activeVisitor.scope.resolve,
             })
@@ -2349,90 +2463,7 @@ function evaluateScorePass(
           diagnostics: [],
         }
       }
-      const local = {
-        loop: undefined,
-        subdivisionContext: visitor.scope.resolve,
-        declarationScope: {},
-        // Nested slots share the containing slot's phrase selection. A later
-        // slot or repeat occurrence takes a new snapshot at its own entry beat.
-        normalizationBase:
-          visitor.scope.normalizationBase ??
-          (timeline && (contextAt(options.initialization, visitor.scope.offset) ?? base)),
-      }
-      const measured = capturePrints(() => visitor.visit(expression, { ...local, layout: true }))
-      let evaluated = measured.result
-      if (!('shape' in evaluated) || visitor.scope.layout || !evaluated.shape.duration.n)
-        measured.flush()
-      if (!('shape' in evaluated)) return evaluated
-      if (!evaluated.shape.duration.n) {
-        return {
-          diagnostics: [
-            ...evaluated.diagnostics,
-            {
-              code: 'XP_NORMALIZE_ZERO',
-              severity: 'error',
-              message: 'A non-empty zero-duration fragment cannot be normalized.',
-              locations: [current.location],
-            },
-          ],
-        }
-      }
-      if (!visitor.scope.layout) {
-        const tried = new Set<string>()
-        for (;;) {
-          const duration: Fraction = evaluated.shape.duration
-          if (!duration.n || tried.has(duration.toFraction()) || tried.size >= 32)
-            return {
-              diagnostics: [
-                {
-                  code: 'XP_TIMELINE_LAYOUT',
-                  severity: 'error',
-                  message:
-                    'Timed context changes do not produce a stable rhythm inside this normalized slot.',
-                  locations: [current.location],
-                },
-              ],
-            }
-          tried.add(duration.toFraction())
-          const placed = capturePrints<ScoreShapeEvaluationResult>(() =>
-            visitor.visit(expression, {
-              ...local,
-              lockedPulse: visitor.scope.base.pulse,
-              timeScale: visitor.scope.timeScale.mul(currentPulse).div(duration),
-            }),
-          )
-          evaluated = placed.result
-          if (!('shape' in evaluated)) {
-            placed.flush()
-            return evaluated
-          }
-          if (evaluated.shape.duration.equals(duration)) {
-            placed.flush()
-            break
-          }
-        }
-      }
-      const normalizedSlots = evaluated.shape.duration.div(currentPulse)
-      const normalized = scaleShape(evaluated.shape, currentPulse.div(evaluated.shape.duration))
-      const tuplet = Number(normalizedSlots.d) === 1 ? Number(normalizedSlots.n) : undefined
-      if (
-        normalized.kind === 'sequence' &&
-        tuplet &&
-        tuplet > 1 &&
-        !Number.isInteger(Math.log2(tuplet))
-      ) {
-        return {
-          shape: { ...normalized, normalized: true, isolatedDirectiveScope: true, tuplet },
-          diagnostics: evaluated.diagnostics,
-        }
-      }
-      return {
-        shape:
-          normalized.kind === 'sequence' || normalized.kind === 'parallel'
-            ? { ...normalized, normalized: true, isolatedDirectiveScope: true }
-            : { ...normalized, isolatedDirectiveScope: true },
-        diagnostics: evaluated.diagnostics,
-      }
+      return fitScore(expression, currentPulse, current, visitor)
     }
     if (current.type === 'PostfixExpression') {
       const evaluated = visitor.visit(current.expression)
@@ -2521,7 +2552,13 @@ function evaluateScorePass(
           }),
           functionBudget: structureEnvironment?.functionBudget,
         },
-      })).spawn({ loop: undefined, subdivisionContext: visitor.scope.resolve })
+      })).spawn({
+        loop: undefined,
+        subdivisionContext: visitor.scope.resolve,
+        ...(fragment.pitchOperations && {
+          pitchOperations: [...fragment.pitchOperations, ...(visitor.scope.pitchOperations ?? [])],
+        }),
+      })
       const body: Extract<Expression, { type: 'Sequence' }> =
         fragment.expression.type === 'Sequence'
           ? fragment.expression
@@ -2530,7 +2567,9 @@ function evaluateScorePass(
               items: [fragment.expression],
               location: fragment.expression.location,
             }
-      const played = visitBlock(body, scope)
+      const played = fragment.targetDuration
+        ? fitScore(fragment.expression, fragment.targetDuration, current, scope)
+        : visitBlock(body, scope)
       const diagnostics = [...value.diagnostics, ...played.diagnostics]
       if (!hasShape(played)) return { diagnostics }
       return {
@@ -2597,7 +2636,11 @@ function evaluateScorePass(
       } else if (!('value' in attack.result)) selected = attack
     }
     selected.flush()
-    const evaluated = playablePitch(current, context, selected.result)
+    const note = visitor.scope.pitchOperations
+      ? applyScorePitchOperations(selected.result, visitor.scope.pitchOperations, context)
+      : selected.result
+    const transformed = note !== selected.result
+    const evaluated = playablePitch(current, context, note)
     let pitch: AttackShape['pitch']
     if ('pitch' in evaluated) pitch = evaluated.pitch
     else {
@@ -2624,16 +2667,17 @@ function evaluateScorePass(
       articulation: currentArticulation,
       directiveState: { ...currentDirectiveState },
       ...(currentArticulationMarks.length ? { articulationMarks: currentArticulationMarks } : {}),
-      ...('raw' in current ? { authoredLabel: String(current.raw) } : {}),
+      ...(!transformed && 'raw' in current ? { authoredLabel: String(current.raw) } : {}),
       ...('pitch' in evaluated && evaluated.justIntonation ? { justIntonation: true } : {}),
-      ...(current.type === 'DegreeLiteral' ||
-      current.type === 'EqualDivisionLiteral' ||
-      (current.type === 'QuantityLiteral' &&
-        ['c', '¢', 'hz', 'khz'].includes(current.unit.toLowerCase()))
+      ...(!transformed &&
+      (current.type === 'DegreeLiteral' ||
+        current.type === 'EqualDivisionLiteral' ||
+        (current.type === 'QuantityLiteral' &&
+          ['c', '¢', 'hz', 'khz'].includes(current.unit.toLowerCase())))
         ? { displayLabel: String(current.raw) }
         : {}),
     }
-    if ('raw' in current) authoredLabels.set(shape, String(current.raw))
+    if (!transformed && 'raw' in current) authoredLabels.set(shape, String(current.raw))
     if (!visitor.scope.layout && visitor.scope.timelineVisit)
       timeline?.attacks.set(shape.pitch, visitor.scope.timelineVisit)
     return {

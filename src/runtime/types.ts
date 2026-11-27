@@ -284,11 +284,23 @@ export interface ContainerValue {
   readonly origins: readonly SourceOrigin[]
 }
 
+/** A scalar operand resolved in its own lexical scope at a score note's tuning. */
+export interface ScorePitchOperation {
+  readonly operator: Extract<Expression, { type: 'BinaryExpression' }>
+  readonly scalar: Expression
+  readonly scalarOnLeft: boolean
+  readonly environment: LexicalEnvironment
+  readonly mapping: PrimeMapping | PitchContext
+  readonly initialValue: EvaluatedLiteral
+}
+
 /** Score syntax with the lexical bindings of its capture site. */
 export interface ScoreFragmentValue {
   readonly kind: 'scoreFragment'
   readonly expression: Expression
   readonly environment: LexicalEnvironment
+  readonly targetDuration?: Fraction
+  readonly pitchOperations?: readonly ScorePitchOperation[]
   readonly value: Value
   readonly origins: readonly SourceOrigin[]
 }

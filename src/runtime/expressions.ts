@@ -26,6 +26,8 @@ import type {
   LexicalEnvironment,
   PitchOffsetValue,
   ScalarValue,
+  ScoreFragmentValue,
+  ScorePitchOperation,
   SliceValue,
   StringValue,
   SourceOrigin,
@@ -1073,6 +1075,89 @@ function captureScoreEnvironment(environment: LexicalEnvironment): LexicalEnviro
   return scope
 }
 
+export function evaluateFitCall(
+  node: Extract<Expression, { type: 'CallExpression' }>,
+  mapping: PrimeMapping | PitchContext,
+  environment: LexicalEnvironment = preludeEnvironment(),
+):
+  | {
+      readonly value: ScoreFragmentValue & { readonly targetDuration: Fraction }
+      readonly diagnostics: readonly Diagnostic[]
+    }
+  | { readonly diagnostics: readonly Diagnostic[] } {
+  const [music, span] = node.arguments
+  if (!music || !span || node.arguments.length !== 2)
+    return {
+      diagnostics: [
+        {
+          code: 'XP_ARITY',
+          severity: 'error',
+          message: 'fit() expects a score and a beat duration.',
+          locations: [node.location],
+        },
+      ],
+    }
+  const evaluated = evaluateExpression(span, mapping, environment)
+  if (!('value' in evaluated)) return evaluated
+  const { value, diagnostics } = evaluated
+  const targetDuration =
+    value.kind === 'scalar' && value.value.dimensions.equals({ beats: 1 })
+      ? value.value.div(Value.beats(1)).exactRational()
+      : null
+  if (!targetDuration || targetDuration.compare(0) <= 0)
+    return {
+      diagnostics: [
+        ...diagnostics,
+        {
+          code: 'XP_FIT_DURATION',
+          severity: 'error',
+          message: 'fit() requires a positive exact duration in beats, such as 0.5beat.',
+          locations: [span.location],
+        },
+      ],
+    }
+  return {
+    value: {
+      kind: 'scoreFragment',
+      expression: music,
+      environment: captureScoreEnvironment(environment),
+      targetDuration,
+      value: new Value(0),
+      origins: [{ location: node.location, role: 'structural' }],
+    },
+    diagnostics,
+  }
+}
+
+export function applyScorePitchOperations(
+  result: ExpressionEvaluationResult,
+  operations: readonly ScorePitchOperation[],
+  context: PitchContext,
+): ExpressionEvaluationResult {
+  if (!('value' in result) || !isArithmeticValue(result.value)) return result
+  const diagnostics = [...result.diagnostics]
+  let value: EvaluatedLiteral = result.value
+  for (const operation of operations) {
+    const { operator, scalar, scalarOnLeft, environment, mapping, initialValue } = operation
+    const resolved =
+      mapping === context
+        ? { value: initialValue, diagnostics: [] }
+        : evaluateExpression(scalar, context, environment)
+    diagnostics.push(...resolved.diagnostics)
+    if (!('value' in resolved)) return { diagnostics }
+    try {
+      if (!isArithmeticValue(resolved.value))
+        throw new TypeError('Score broadcasting requires a scalar operand.')
+      const left = scalarOnLeft ? resolved.value : value
+      const right = scalarOnLeft ? value : resolved.value
+      value = binary(operator.operator, left, right, operator)
+    } catch (error) {
+      return { diagnostics: [...diagnostics, diagnostic(operator, error)] }
+    }
+  }
+  return { value, diagnostics }
+}
+
 function pitchContextFor(mapping: PrimeMapping | PitchContext): PitchContext {
   return 'rootPitch' in mapping ? mapping : createPitchContext(mapping)
 }
@@ -1431,6 +1516,7 @@ export function evaluateExpression(
       case 'CallExpression': {
         const called = evaluateFunctionCall(node, mapping, environment, evaluate)
         if (called) return called
+        if (node.callee === 'fit') return evaluateFitCall(node, mapping, environment)
         return evaluateBuiltinCall(node, environment, evaluate, (callable, args) =>
           evaluateCallable(
             callable,
@@ -1458,11 +1544,27 @@ export function evaluateExpression(
         if (node.operator === '@and' || node.operator === '@or')
           return done(isTruthy(left) === (node.operator === '@or') ? left : read(node.right))
         const right = read(node.right)
-        return done(
-          isComparison(node.operator)
-            ? compareOperands(node, left, right)
-            : binary(node.operator, left, right, node),
-        )
+        if (isComparison(node.operator)) return done(compareOperands(node, left, right))
+        const scalarOnLeft = right.kind === 'scoreFragment'
+        const fragment = scalarOnLeft ? right : left
+        const scalar = scalarOnLeft ? left : right
+        if (fragment.kind === 'scoreFragment' && isArithmeticValue(scalar))
+          return done({
+            ...fragment,
+            pitchOperations: [
+              ...(fragment.pitchOperations ?? []),
+              {
+                operator: node,
+                scalar: scalarOnLeft ? node.left : node.right,
+                scalarOnLeft,
+                environment: captureScoreEnvironment(environment),
+                mapping,
+                initialValue: scalar,
+              },
+            ],
+            origins: operatorOrigins(left, right, node),
+          })
+        return done(binary(node.operator, left, right, node))
       }
       default:
         throw new TypeError(`${node.type} is not an arithmetic expression.`)

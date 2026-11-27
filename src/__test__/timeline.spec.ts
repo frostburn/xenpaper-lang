@@ -33,6 +33,21 @@ function notes(source: string, initialization: ScoreInitialization, offset?: Fra
 }
 
 describe('global grid context', () => {
+  it('reads timed tuning at fitted attacks and restores the prevailing pulse afterward', () => {
+    const initialization = initialize('@2 ... {19edo}')
+    const fitted = notes('fit((D D), 4beat) D', initialization)
+    expect(
+      fitted.map(({ start, duration }) => [start.toFraction(), duration.toFraction()]),
+    ).toEqual([
+      ['0', '2'],
+      ['2', '2'],
+      ['4', '1/2'],
+    ])
+    const starting = notes('D', initialize(''))[0]!.pitch.value.valueOf()
+    const later = notes('D', initialize('{19edo}'))[0]!.pitch.value.valueOf()
+    expect(fitted.map(({ pitch }) => pitch.value.valueOf())).toEqual([starting, later, later])
+  })
+
   it('publishes both targets of a timed destructuring assignment at the same beat', () => {
     const initialization = initialize('let (foo, bar) <- (C, D) $ . $ (foo, bar) <- (bar, foo)')
     const labels = (offset: Fraction) =>
