@@ -586,7 +586,29 @@ to that end. Binary `->` ties matching pitches into the following operand.
 
 When arithmetic broadcasts a scalar over a score, the score supplies the
 rhythm, continuations, and articulation. The scalar supplies the pitch
-transformation.
+transformation. This also works with stored fragments and scores returned by
+functions. For example, `phrase + P5` raises each note by a perfect fifth in
+its prevailing tuning, and `phrase + 3/2` raises each note by the exact ratio.
+Multiplication scales relative pitch intervals, so `intervals() * 3/2` stretches
+each returned interval by a factor of 1.5.
+
+### Fit music to a beat duration
+
+`fit(music, span)` scales a note, rest, chord, or phrase to an exact duration in
+beats. Use a positive beat quantity such as `0.5beat` or `3/2 * 1beat`. The
+requested duration is independent of the current subdivision. Notes and rests
+keep their rhythmic proportions, and directives inside the fragment stay local.
+
+```text
+{31edo}
+let span <- 4beat
+let subject <- (@4 D=== D=== . F=====)
+fit(subject, span)
+fit(subject - P4, 2 * span)
+fit(., 0.25beat)
+```
+
+A fitted score can also be stored in a binding or returned from a function.
 
 `fn name(parameters) { ... }` creates a lexical closure. The body can run `let`
 and `fn` declarations, assignments, and control blocks. `ret expression`
