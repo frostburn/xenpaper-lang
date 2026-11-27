@@ -301,7 +301,9 @@ UnaryOperator
   / "√" { return "√"; }
 
 PostfixExpression
-  = expression:PrimaryExpression indexes:("[" Spacing index:ValueExpression Spacing "]" { return { index, end: location().end }; })* marks:AttachedPostfixMark* {
+  = expression:PrimaryExpression
+    indexes:(!PatternAssignmentStart "[" Spacing index:ValueExpression Spacing "]" { return { index, end: location().end }; })*
+    marks:AttachedPostfixMark* {
       let result = expression;
       for (const { index, end } of indexes) {
         result = node('IndexExpression', { container: result, index }, { ...result.location, end });
@@ -823,16 +825,40 @@ CallName
   = !("v" !IdentifierContinue) @MusicalIdentifier
 
 CallArguments
-  = "(" Spacing @Expression|.., Comma| Spacing ")"
+  = !PatternAssignmentStart "(" Spacing @Expression|.., Comma| Spacing ")"
 
 // Declarations are score items with no duration. Their bindings become visible
 // only to following items in the same lexical sequence. Nested groups and
 // parallel branches receive child scopes. Shadowing is permitted; recursion is
 // deliberately rejected by the evaluator.
 VariableDeclaration
-  = "let" !IdentifierContinue RequiredSpacing name:LocatedIdentifier Spacing "<-" Spacing value:BindingValue {
-      return node('VariableDeclaration', { name, value });
+  = "let" !IdentifierContinue RequiredSpacing target:BindingTarget Spacing "<-" Spacing value:BindingValue {
+      return target.type === 'BindingPattern'
+        ? node('DestructuringDeclaration', { pattern: target, value })
+        : node('VariableDeclaration', { name: target, value });
     }
+
+BindingTarget
+  = LocatedIdentifier / BindingPattern
+
+BindingPattern
+  = "(" Spacing names:BindingPatternNames Spacing ")" {
+      return node('BindingPattern', { names });
+    }
+  / "[" Spacing names:BindingPatternNames Spacing "]" {
+      return node('BindingPattern', { names });
+    }
+  / "(" Spacing name:LocatedIdentifier Comma ")" {
+      return node('BindingPattern', { names: [name] });
+    }
+
+BindingPatternNames
+  = @LocatedIdentifier|2.., Comma|
+  / @LocatedIdentifier|2.., RequiredSpacing|
+
+// An upcoming assignment belongs to the next score item, even beside a call or index.
+PatternAssignmentStart
+  = BindingPattern Spacing "<-"
 
 // A newline can end the binding value between score items. An expression can
 // still consume newlines itself, for example inside parentheses or after an operator.
@@ -847,11 +873,13 @@ InlineSpacing
 
 StatementStart
   = ("let" / "fn" / "ret" / "throw" / "try" / "if" / "for" / "while" / "break" / "continue") !IdentifierContinue
-  / LocatedIdentifier Spacing "<-"
+  / BindingTarget Spacing "<-"
 
 BindingAssignment
-  = name:LocatedIdentifier Spacing "<-" Spacing value:BindingValue {
-      return node('BindingAssignment', { name, value });
+  = target:BindingTarget Spacing "<-" Spacing value:BindingValue {
+      return target.type === 'BindingPattern'
+        ? node('DestructuringAssignment', { pattern: target, value })
+        : node('BindingAssignment', { name: target, value });
     }
 
 ThrowStatement

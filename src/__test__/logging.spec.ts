@@ -5,6 +5,20 @@ import { expandToBeatEvents, evaluateExpression, evaluateInitialization, parse }
 afterEach(() => vi.restoreAllMocks())
 
 describe('print and warn', () => {
+  it('evaluates each container binding initializer once', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const result = expandToBeatEvents(
+      parse(`
+fn pair(value) { print(value) $ ret (value, value) }
+let (foo, bar) <- pair(1/1)
+(foo, bar) <- pair(2/1)
+foo bar
+`),
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(log.mock.calls).toEqual([[1], [2]])
+  })
+
   it('passes zero or more evaluated arguments to console.log', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(evaluateExpression(parse('print()').body[0]!)).toMatchObject({

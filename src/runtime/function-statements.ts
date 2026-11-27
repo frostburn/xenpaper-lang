@@ -2,6 +2,7 @@ import type { Expression, Identifier, Node } from '../parser.js'
 import { catchableDiagnostic, EvaluationError, type Diagnostic } from '../diagnostics.js'
 import { Value } from '../value.js'
 import {
+  evaluateBindings,
   evaluateDeclaration,
   evaluateExpression,
   evaluateThrow,
@@ -60,6 +61,21 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
     bindings.set(child, variables)
     return { scope: child, declarationScope: {} }
   }
+  function assignmentVariables(id: Identifier, frame: Frame): Map<string, EvaluatedLiteral> {
+    const { name } = id
+    for (let scope: LexicalEnvironment | undefined = frame.scope; scope; scope = scope.parent) {
+      if (scope.functions.has(name)) break
+      if (!scope.variables.has(name)) continue
+      const variables = bindings.get(scope)
+      if (variables) return variables
+      break
+    }
+    return fail(
+      id,
+      'XP_ASSIGNMENT',
+      `Assignment requires a local variable or parameter named ${name}.`,
+    )
+  }
   function block(nodes: readonly Expression[], frame: Frame): Transfer<R> | undefined {
     for (const node of nodes) {
       const completion = execute(node, frame)
@@ -72,36 +88,37 @@ export function executeFunctionStatements<R extends { diagnostics: readonly Diag
       case 'Sequence':
         return block(node.items, frame)
       case 'FunctionDeclaration':
-      case 'VariableDeclaration': {
+      case 'VariableDeclaration':
+      case 'DestructuringDeclaration': {
         const declared = evaluateDeclaration(node, mapping, frame.scope, frame.declarationScope)
         if (declared.diagnostics.some((d) => d.severity === 'error'))
           throw new EvaluationError(declared.diagnostics)
         diagnostics.push(...declared.diagnostics)
         frame.scope = declared.environment
-        if (node.type === 'VariableDeclaration') {
+        if (node.type !== 'FunctionDeclaration') {
           const variables = new Map(frame.scope.variables)
           frame.scope = { ...frame.scope, variables }
           bindings.set(frame.scope, variables)
         }
         return
       }
-      case 'BindingAssignment': {
-        const name = node.name.name
-        for (let scope: LexicalEnvironment | undefined = frame.scope; scope; scope = scope.parent) {
-          if (scope.functions.has(name)) break
-          if (!scope.variables.has(name)) continue
-          const names = bindings.get(scope)
-          if (!names) break
-          const value = read(node.value, frame)
+      case 'BindingAssignment':
+      case 'DestructuringAssignment': {
+        const target = node.type === 'BindingAssignment' ? node.name : node.pattern
+        const single = target.type === 'Identifier' ? assignmentVariables(target, frame) : undefined
+        const evaluated = evaluateBindings(target, node.value, mapping, frame.scope)
+        if (!('entries' in evaluated)) throw new EvaluationError(evaluated.diagnostics)
+        diagnostics.push(...evaluated.diagnostics)
+        const updates = evaluated.entries.map(([id, value]) => ({
+          names: single ?? assignmentVariables(id, frame),
+          name: id.name,
+          value,
+        }))
+        for (const { names, name, value } of updates) {
           journal?.push({ names, name, previous: names.get(name)! })
           names.set(name, value)
-          return
         }
-        return fail(
-          node.name,
-          'XP_ASSIGNMENT',
-          `Assignment requires a local variable or parameter named ${name}.`,
-        )
+        return
       }
       case 'ReturnStatement': {
         const result = evaluateReturn(node.value, frame.scope, journal !== undefined)

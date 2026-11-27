@@ -52,7 +52,9 @@ export const deferredRepeatNodes = [
   'ForBlock',
   'WhileBlock',
   'VariableDeclaration',
+  'DestructuringDeclaration',
   'BindingAssignment',
+  'DestructuringAssignment',
   'FunctionDeclaration',
   'CallExpression',
 ] as const satisfies readonly Expression['type'][]

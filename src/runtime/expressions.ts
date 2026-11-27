@@ -1,4 +1,10 @@
-import { parse, type Expression, type FunctionParameter } from '../parser.js'
+import {
+  parse,
+  type BindingPattern,
+  type Expression,
+  type FunctionParameter,
+  type Identifier,
+} from '../parser.js'
 import { Fraction, mmod } from 'xen-dev-utils/fraction'
 import { EvaluationError, type Diagnostic } from '../diagnostics.js'
 import { isPositiveRationalRatio, Value } from '../value.js'
@@ -124,7 +130,11 @@ export function preludeEnvironment(): LexicalEnvironment {
     node.type === 'Sequence' ? node.items : [node],
   )
   for (const declaration of declarations) {
-    if (declaration.type !== 'VariableDeclaration' && declaration.type !== 'FunctionDeclaration') {
+    if (
+      declaration.type !== 'VariableDeclaration' &&
+      declaration.type !== 'DestructuringDeclaration' &&
+      declaration.type !== 'FunctionDeclaration'
+    ) {
       throw new TypeError('The Xenpaper prelude may only contain declarations.')
     }
     const evaluated = evaluateDeclaration(declaration, DEFAULT_PITCH_CONTEXT, environment)
@@ -141,26 +151,75 @@ export function preludeEnvironment(): LexicalEnvironment {
 // identifies the enclosing lexical scope across those snapshots.
 const declarationScopes = new WeakMap<LexicalEnvironment | FunctionDefinition, object>()
 
+export type BindingEntries = readonly (readonly [Identifier, EvaluatedLiteral])[]
+
+/** Resolve every value in the original environment before any binding is installed. */
+export function evaluateBindings(
+  target: Identifier | BindingPattern,
+  initializer: Expression,
+  mapping: PrimeMapping | PitchContext,
+  environment: LexicalEnvironment | undefined,
+):
+  | { readonly entries: BindingEntries; readonly diagnostics: readonly Diagnostic[] }
+  | { readonly diagnostics: readonly Diagnostic[] } {
+  const evaluated = evaluateExpression(initializer, mapping, environment)
+  const { diagnostics } = evaluated
+  if (!('value' in evaluated) || diagnostics.some(({ severity }) => severity === 'error'))
+    return { diagnostics }
+  const { value } = evaluated
+  if (target.type === 'Identifier') return { entries: [[target, value]], diagnostics }
+  const fail = (message: string, locations = [target.location]) => ({
+    diagnostics: [
+      ...diagnostics,
+      { code: 'XP_BINDING_PATTERN', severity: 'error' as const, message, locations },
+    ],
+  })
+  if (value.kind !== 'container')
+    return fail('A binding pattern requires a container on the right-hand side.', [
+      initializer.location,
+    ])
+  if (value.values.length !== target.names.length)
+    return fail(
+      `Binding pattern expects ${target.names.length} elements, but received ${value.values.length}.`,
+    )
+  const seen = new Map<string, Identifier>()
+  for (const name of target.names) {
+    const previous = seen.get(name.name)
+    if (previous)
+      return fail(`Duplicate binding name ${name.name}.`, [name.location, previous.location])
+    seen.set(name.name, name)
+  }
+  return { entries: target.names.map((name, index) => [name, value.values[index]!]), diagnostics }
+}
+
 export function evaluateDeclaration(
-  node: Extract<Expression, { type: 'VariableDeclaration' | 'FunctionDeclaration' }>,
+  node: Extract<
+    Expression,
+    { type: 'VariableDeclaration' | 'DestructuringDeclaration' | 'FunctionDeclaration' }
+  >,
   mapping: PrimeMapping | PitchContext = DEFAULT_PITCH_CONTEXT,
   environment?: LexicalEnvironment,
   declarationScope = (environment && declarationScopes.get(environment)) ?? {},
 ): { readonly environment: LexicalEnvironment; readonly diagnostics: readonly Diagnostic[] } {
   environment ??= preludeEnvironment()
-  if (node.type === 'VariableDeclaration') {
-    const evaluated = evaluateExpression(node.value, mapping, environment)
-    if (!('value' in evaluated)) return { environment, diagnostics: evaluated.diagnostics }
+  if (node.type !== 'FunctionDeclaration') {
+    const evaluated = evaluateBindings(
+      node.type === 'VariableDeclaration' ? node.name : node.pattern,
+      node.value,
+      mapping,
+      environment,
+    )
+    if (!('entries' in evaluated)) return { environment, diagnostics: evaluated.diagnostics }
     const next = extendLexicalEnvironment(environment, {
-      variables: new Map([
-        [
-          node.name.name,
-          annotateReference(evaluated.value, {
-            location: node.name.location,
+      variables: new Map(
+        evaluated.entries.map(([name, value]) => [
+          name.name,
+          annotateReference(value, {
+            location: name.location,
             role: 'structural',
           }),
-        ],
-      ]),
+        ]),
+      ),
     })
     declarationScopes.set(next, declarationScope)
     return { environment: next, diagnostics: evaluated.diagnostics }
