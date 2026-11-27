@@ -1,6 +1,6 @@
 {
   "name": "xenpaper-lang",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Microtonal score language and renderer-independent runtime used by Xenpaper 3",
   "license": "MIT",
   "repository": {
